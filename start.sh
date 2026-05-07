@@ -25,4 +25,23 @@ fi
 # container), so removing the file unconditionally is safe.
 rm -f /data/.hermes/gateway.pid
 
+# Optionally install/refresh GBrain (Dbrain) from a fork repo into
+# /data/gbrain and `bun link` it so the `gbrain` CLI is available to Hermes.
+# The script honors GBRAIN_REQUIRED: when false, install failures are warned
+# and the script exits 0 so Hermes still starts. We disable -e around the
+# call defensively in case the script itself fails before reaching its own
+# error handlers.
+mkdir -p /data/.bun/bin
+set +e
+/app/install_gbrain.sh
+gbrain_rc=$?
+set -e
+if [ "$gbrain_rc" -ne 0 ]; then
+  if [ "$(printf '%s' "${GBRAIN_REQUIRED:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
+    echo "[start.sh] install_gbrain.sh failed (rc=$gbrain_rc) and GBRAIN_REQUIRED=true — aborting." >&2
+    exit "$gbrain_rc"
+  fi
+  echo "[start.sh] install_gbrain.sh exited rc=$gbrain_rc — continuing without GBrain." >&2
+fi
+
 exec python /app/server.py

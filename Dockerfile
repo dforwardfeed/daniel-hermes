@@ -22,10 +22,18 @@ ARG HERMES_REF=v2026.4.30
 # Node.js is required only at build time to compile the Hermes React dashboard.
 # We strip the source + apt lists afterwards to keep the image lean.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates git tini && \
+    apt-get install -y --no-install-recommends curl ca-certificates git tini unzip && \
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     rm -rf /var/lib/apt/lists/*
+
+# Install Bun system-wide. The official installer drops the binary in
+# $HOME/.bun/bin; we move it to /usr/local/bin so it's resolvable for any
+# user/process. At runtime BUN_INSTALL points at the persistent volume so
+# `bun link` survives across container restarts (see ENV below).
+RUN curl -fsSL https://bun.sh/install | bash && \
+    mv /root/.bun/bin/bun /usr/local/bin/bun && \
+    rm -rf /root/.bun
 
 # Install hermes-agent (provides the `hermes` CLI) and pre-build its React
 # dashboard so `hermes dashboard` has nothing to build at runtime.
@@ -64,10 +72,17 @@ RUN mkdir -p /data/.hermes
 COPY server.py /app/server.py
 COPY templates/ /app/templates/
 COPY start.sh /app/start.sh
-RUN chmod +x /app/start.sh
+COPY install_gbrain.sh /app/install_gbrain.sh
+RUN chmod +x /app/start.sh /app/install_gbrain.sh
 
 ENV HOME=/data
 ENV HERMES_HOME=/data/.hermes
+
+# Bun's global install / link target lives on the persistent /data volume so
+# `bun link` of GBrain survives container restarts. The bin dir is added to
+# PATH so the linked `gbrain` CLI is resolvable for the Hermes process.
+ENV BUN_INSTALL=/data/.bun
+ENV PATH=/data/.bun/bin:$PATH
 
 # tini wraps start.sh so it runs as PID 1's child instead of as PID 1 itself.
 # `-g` propagates signals to the whole process group so `docker stop` /
