@@ -517,6 +517,23 @@ async def page_daily(request: Request) -> Response:
 
 
 # ── Registration ──────────────────────────────────────────────────────────────
+def _log_startup_banner() -> None:
+    """One line in deploy logs so we can verify server-side env capture
+    without leaking the token. Logs ONLY length and presence flags —
+    never the value itself.
+    """
+    print(
+        f"[genui] enabled={'true' if GENUI_ENABLED else 'false'}"
+        f" base_url_set={'true' if GENUI_BASE_URL else 'false'}"
+        f" storage={GENUI_STORAGE}"
+        f" ttl_hours={GENUI_TEMPORARY_TTL_HOURS}"
+        f" auto_save_categories={sorted(GENUI_AUTO_SAVE_CATEGORIES)}"
+        f" token_len={len(GENUI_API_TOKEN)}"
+        f" token_auth={'enabled' if GENUI_API_TOKEN else 'disabled'}",
+        flush=True,
+    )
+
+
 def get_routes(
     templates_engine: Jinja2Templates,
     guard_fn: Callable[[Request], Response | None],
@@ -531,6 +548,7 @@ def get_routes(
     _templates = templates_engine
     _guard = guard_fn
     _ensure_dirs()
+    _log_startup_banner()
     return [
         # /list MUST come before /{id} so it isn't swallowed by the placeholder.
         Route("/api/ui/artifacts/list", api_list, methods=["GET"]),

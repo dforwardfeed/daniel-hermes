@@ -431,8 +431,16 @@ class Gateway:
             # .env values take priority over Railway env vars.
             # We build the env this way so hermes's own dotenv loading
             # (which reads the same file) doesn't shadow our values.
+            #
+            # Defensive: only let *non-empty* .env values override the
+            # process env. write_env drops empty values on save, but if
+            # /data/.hermes/.env is ever edited externally (or by a
+            # future caller) and contains `KEY=`, a blind dict.update
+            # would clobber a perfectly good Railway value with "".
             env = {**os.environ, "HERMES_HOME": HERMES_HOME}
-            env.update(read_env(ENV_FILE))
+            for k, v in read_env(ENV_FILE).items():
+                if v:
+                    env[k] = v
             model = env.get("LLM_MODEL", "")
             provider_key = next((env.get(k, "") for k in PROVIDER_KEYS if env.get(k)), "")
             print(f"[gateway] model={model or '⚠ NOT SET'} | provider_key={'set' if provider_key else '⚠ NOT SET'}", flush=True)
