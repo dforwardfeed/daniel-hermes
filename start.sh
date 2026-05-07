@@ -1,6 +1,14 @@
 #!/bin/bash
 set -e
 
+# Make sure the bun-linked CLI dir is on PATH for everything start.sh spawns
+# (install_gbrain.sh, server.py, and any process server.py forks). The
+# Dockerfile already sets ENV PATH but we re-export here so the value is
+# unambiguous in this shell and any non-login child shell that inherits env.
+# /etc/profile.d/bun-path.sh handles the login-shell case for Hermes terminal.
+export BUN_INSTALL="/data/.bun"
+export PATH="/data/.bun/bin:/root/.bun/bin:$PATH"
+
 # Mirror dashboard-ref-only's startup: create every directory hermes expects
 # and seed a default config.yaml if the volume is empty. Without these,
 # `hermes dashboard` endpoints that hit logs/, sessions/, cron/, etc. can fail

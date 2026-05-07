@@ -16,6 +16,11 @@
 
 set -u
 
+# Ensure the bun-linked CLI dir is on PATH even when this script is invoked
+# directly (outside start.sh). Idempotent with start.sh's own export.
+export BUN_INSTALL="${BUN_INSTALL:-/data/.bun}"
+export PATH="$BUN_INSTALL/bin:/root/.bun/bin:$PATH"
+
 GBRAIN_ENABLED="${GBRAIN_ENABLED:-false}"
 GBRAIN_REPO_URL="${GBRAIN_REPO_URL:-https://github.com/dforwardfeed/Dbrain-hermes.git}"
 GBRAIN_REF="${GBRAIN_REF:-main}"

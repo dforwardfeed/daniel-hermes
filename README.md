@@ -103,6 +103,18 @@ docker run --rm -it -p 8080:8080 -e PORT=8080 -e ADMIN_PASSWORD=changeme -v herm
 
 Open `http://localhost:8080` and log in with `admin` / `changeme`.
 
+## GBrain (optional)
+
+When `GBRAIN_ENABLED=true`, `start.sh` clones `GBRAIN_REPO_URL` into `GBRAIN_DIR` (default `/data/gbrain`) and runs `bun install` + `bun link` so the `gbrain` CLI is available to Hermes.
+
+The bun-linked binary lives at `/data/.bun/bin/gbrain`. For Hermes — including its terminal tool, gateway subprocesses, and anything spawned from the dashboard — to find it as plain `gbrain`, the directory `/data/.bun/bin` must be on `PATH`. The image handles this in three layers so all child-process and shell-spawn patterns work:
+
+1. **`ENV PATH` in the Dockerfile** — exported into every process started from the image.
+2. **`export PATH` in `start.sh` and `install_gbrain.sh`** — ensures non-login child shells inherit it explicitly.
+3. **`/etc/profile.d/bun-path.sh`** — re-applies the path inside *login* shells, since `/etc/profile` on Debian otherwise resets `PATH` from scratch and would hide `gbrain` from any pty-backed terminal Hermes opens.
+
+If you ever see `which gbrain` failing inside Hermes while `/data/.bun/bin/gbrain --version` works, one of those three layers has been bypassed.
+
 ## Credits
 
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) by [Nous Research](https://nousresearch.com/)

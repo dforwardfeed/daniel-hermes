@@ -84,6 +84,14 @@ ENV HERMES_HOME=/data/.hermes
 ENV BUN_INSTALL=/data/.bun
 ENV PATH=/data/.bun/bin:$PATH
 
+# Login shells (e.g. the pty Hermes opens for its terminal tool) reload PATH
+# from /etc/profile and clobber the inherited value. Drop a profile.d snippet
+# so the bun bin dir is restored for any login shell, making `which gbrain`
+# work inside Hermes terminals without forcing absolute paths.
+RUN printf 'export BUN_INSTALL="/data/.bun"\nexport PATH="/data/.bun/bin:/root/.bun/bin:$PATH"\n' \
+      > /etc/profile.d/bun-path.sh && \
+    chmod +x /etc/profile.d/bun-path.sh
+
 # tini wraps start.sh so it runs as PID 1's child instead of as PID 1 itself.
 # `-g` propagates signals to the whole process group so `docker stop` /
 # Railway's SIGTERM cleanly terminates the entire tree, not just start.sh.
