@@ -70,6 +70,7 @@ RUN uv pip install --system --no-cache -r /app/requirements.txt
 RUN mkdir -p /data/.hermes
 
 COPY server.py /app/server.py
+COPY genui.py /app/genui.py
 COPY templates/ /app/templates/
 COPY start.sh /app/start.sh
 COPY install_gbrain.sh /app/install_gbrain.sh
