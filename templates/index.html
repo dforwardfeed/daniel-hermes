@@ -745,6 +745,16 @@
       <span class="nav-badge" :class="{visible: pendingCount>0}" x-text="pendingCount"></span>
     </div>
 
+    <div class="nav-group-label" style="margin-top:8px">UI Sessions</div>
+    <div class="nav-item" @click="window.location.href='/ui/saved'">
+      <span class="nav-icon">▤</span>
+      <span>Saved Library</span>
+    </div>
+    <div class="nav-item" @click="window.location.href='/ui/daily'">
+      <span class="nav-icon">◷</span>
+      <span>Daily</span>
+    </div>
+
     <div class="nav-group-label" style="margin-top:8px">Resources</div>
     <div class="nav-item" :class="{active: page==='guide'}" @click="page='guide'">
       <span class="nav-icon">📖</span>

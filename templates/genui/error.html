@@ -1,0 +1,20 @@
+{% extends "genui/_base.html" %}
+{% block body %}
+<div class="card">
+  <div class="section-h" style="margin-top:0">Renderer not available</div>
+  <p class="muted">
+    This artifact uses <code>renderSpec.kind = "{{ kind }}"</code>, which is not yet
+    rendered server-side in this MVP. Only <code>kind = "template"</code> with one of
+    {{ supported_templates|join(', ') }} is fully wired.
+  </p>
+  <p class="muted" style="margin-top:8px">
+    The raw payload is included below for debugging.
+  </p>
+</div>
+<div class="card">
+  <div class="section-h" style="margin-top:0">renderSpec</div>
+  <pre>{{ art.renderSpec|tojson(indent=2) }}</pre>
+  <div class="section-h">payload</div>
+  <pre>{{ payload|tojson(indent=2) }}</pre>
+</div>
+{% endblock %}

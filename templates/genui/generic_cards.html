@@ -1,0 +1,33 @@
+{% extends "genui/_base.html" %}
+{% block body %}
+{% set cards = payload.get('cards', []) %}
+{% set summary = payload.get('summary', '') %}
+
+{% if summary %}
+<div class="card"><p style="color:#c9d1d9">{{ summary }}</p></div>
+{% endif %}
+
+{% if cards %}
+<div class="grid">
+  {% for c in cards %}
+  <div class="card">
+    {% if c.tag %}<span class="tag">{{ c.tag }}</span>{% endif %}
+    {% if c.title %}<h3 style="font-size:15px;font-weight:500;color:#f0f6fc;margin:6px 0 4px">{{ c.title }}</h3>{% endif %}
+    {% if c.subtitle %}<div class="muted" style="font-size:12px;margin-bottom:8px">{{ c.subtitle }}</div>{% endif %}
+    {% if c.body %}<p style="font-size:13px;color:#c9d1d9">{{ c.body }}</p>{% endif %}
+    {% if c.fields %}
+      <dl style="margin-top:10px;font-size:12px">
+        {% for k, v in c.fields.items() %}
+          <dt class="muted" style="font-family:'IBM Plex Mono',monospace;font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin-top:6px">{{ k }}</dt>
+          <dd style="color:#c9d1d9">{{ v }}</dd>
+        {% endfor %}
+      </dl>
+    {% endif %}
+    {% if c.url %}<div style="margin-top:10px"><a href="{{ c.url }}" target="_blank" rel="noopener">{{ c.linkText or 'Open' }} →</a></div>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card empty">No cards.</div>
+{% endif %}
+{% endblock %}

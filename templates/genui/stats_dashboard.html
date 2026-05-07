@@ -1,0 +1,50 @@
+{% extends "genui/_base.html" %}
+{% block body %}
+{% set kpis = payload.get('kpis', []) %}
+{% set sections = payload.get('sections', []) %}
+{% set summary = payload.get('summary', '') %}
+
+{% if summary %}
+<div class="card">
+  <p style="color:#c9d1d9;font-size:14px">{{ summary }}</p>
+</div>
+{% endif %}
+
+{% if kpis %}
+<div class="grid">
+  {% for k in kpis %}
+  <div class="card">
+    <div class="kpi-label">{{ k.label }}</div>
+    <div class="kpi">{{ k.value }}</div>
+    {% if k.delta %}
+      {% set up = (k.delta is string and k.delta.startswith('+')) or (k.delta is number and k.delta >= 0) %}
+      <div class="kpi-delta {{ 'up' if up else 'down' }}">{{ k.delta }}{% if k.deltaLabel %} {{ k.deltaLabel }}{% endif %}</div>
+    {% endif %}
+    {% if k.note %}<div class="muted" style="font-size:11px;margin-top:4px">{{ k.note }}</div>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% for section in sections %}
+<div class="card" style="margin-top:14px">
+  {% if section.title %}<div class="section-h" style="margin-top:0">{{ section.title }}</div>{% endif %}
+  {% if section.text %}<p class="muted">{{ section.text }}</p>{% endif %}
+  {% if section.rows %}
+  <table style="margin-top:8px">
+    {% set cols = section.columns or (section.rows[0].keys()|list if section.rows else []) %}
+    <thead><tr>{% for c in cols %}<th>{{ c }}</th>{% endfor %}</tr></thead>
+    <tbody>
+      {% for row in section.rows %}
+      <tr>{% for c in cols %}<td>{{ row.get(c, '') }}</td>{% endfor %}</tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endfor %}
+
+{% if not kpis and not sections and not summary %}
+<div class="card empty">No stats data provided.</div>
+{% endif %}
+{% endblock %}

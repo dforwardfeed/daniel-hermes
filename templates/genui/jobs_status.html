@@ -1,0 +1,50 @@
+{% extends "genui/_base.html" %}
+{% block body %}
+{% set jobs = payload.get('jobs', []) %}
+{% set summary = payload.get('summary', '') %}
+
+{% set status_color = {
+  'running': 'blue', 'queued': 'gray', 'pending': 'yellow',
+  'success': 'green', 'completed': 'green', 'done': 'green',
+  'failed': 'red', 'error': 'red', 'cancelled': 'gray',
+} %}
+
+{% if summary %}
+<div class="card"><p style="color:#c9d1d9">{{ summary }}</p></div>
+{% endif %}
+
+<div class="card">
+  {% if jobs %}
+  <table>
+    <thead>
+      <tr>
+        <th>Status</th>
+        <th>Job</th>
+        <th>Started</th>
+        <th>Duration</th>
+        <th>Detail</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for j in jobs %}
+      {% set s = (j.status or '')|lower %}
+      <tr>
+        <td>
+          <span class="status-dot {{ status_color.get(s, 'gray') }}"></span>
+          <span class="tag" style="margin:0">{{ s or 'unknown' }}</span>
+        </td>
+        <td><strong style="color:#f0f6fc">{{ j.name or j.id or 'Job' }}</strong>
+          {% if j.id %}<div class="muted" style="font-size:11px">{{ j.id }}</div>{% endif %}
+        </td>
+        <td>{{ j.started_at or j.started or '' }}</td>
+        <td>{{ j.duration or '' }}</td>
+        <td>{{ j.detail or j.message or '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">No jobs reported.</div>
+  {% endif %}
+</div>
+{% endblock %}

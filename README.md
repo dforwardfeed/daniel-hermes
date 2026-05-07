@@ -103,6 +103,106 @@ docker run --rm -it -p 8080:8080 -e PORT=8080 -e ADMIN_PASSWORD=changeme -v herm
 
 Open `http://localhost:8080` and log in with `admin` / `changeme`.
 
+## GenUI artifact portal
+
+The server hosts a small portal that stores structured **UI artifacts** as JSON files under `/data/genui/artifacts` and renders them with server-side Jinja templates. Anything that can produce structured data — GBrain, a cron job, a chat handler — can POST an artifact and get back a shareable URL.
+
+### Routes
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/ui/artifacts` | Create artifact, returns `{id, url, status}` |
+| `GET` | `/api/ui/artifacts/list` | List artifacts (`?status=saved&category=…` optional) |
+| `GET` | `/api/ui/artifacts/{id}` | Fetch raw artifact JSON |
+| `POST` | `/api/ui/artifacts/{id}/save` | Promote temporary → saved (clears expiry) |
+| `DELETE` | `/api/ui/artifacts/{id}` | Delete artifact |
+| `GET` | `/ui/latest/{id}` | Render artifact in browser |
+| `GET` | `/ui/saved` | Saved-library index (grouped by date / category) |
+| `GET` | `/ui/saved/{id}` | Render saved artifact (404 if not saved) |
+| `GET` | `/ui/daily` | Latest in `daily_briefing` / `briefing` / `stats` / `reports` |
+
+### Render templates (MVP)
+
+`renderSpec.kind = "template"` with one of: `search_table`, `stats_dashboard`, `timeline_view`, `jobs_status`, `generic_cards`. The other two kinds (`json-render`, `openui`) accept-and-store but render to a placeholder for now.
+
+### Auth
+
+Browser users hit the same cookie session as the setup wizard. For server-to-server POSTs from inside the same container (e.g. GBrain), set `GENUI_API_TOKEN` and send `Authorization: Bearer <token>`. Both auth paths are accepted; either is sufficient.
+
+### Env vars
+
+| Variable | Default | Description |
+|---|---|---|
+| `GENUI_ENABLED` | `true` | Master switch |
+| `GENUI_BASE_URL` | *(infer from request)* | Used to build the `url` in POST responses |
+| `GENUI_STORAGE` | `/data/genui` | Storage root |
+| `GENUI_TEMPORARY_TTL_HOURS` | `72` | Temporary artifact expiry |
+| `GENUI_AUTO_SAVE_CATEGORIES` | `daily_briefing,portfolio,jobs` | Categories that skip the temporary stage |
+| `GENUI_API_TOKEN` | *(unset)* | Bearer token for server-to-server auth |
+
+### Curl test (after Railway deploy)
+
+Replace `BASE` with your Railway URL (or `GENUI_BASE_URL`) and `TOKEN` with `GENUI_API_TOKEN`:
+
+```bash
+BASE="https://your-app.up.railway.app"
+TOKEN="your-genui-api-token"
+
+# 1) Create a search_table artifact
+curl -sS -X POST "$BASE/api/ui/artifacts" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Hermes search results",
+    "category": "search",
+    "viewType": "table",
+    "source": {"operation":"web_search","transport":"http","trigger":"chat"},
+    "payload": {
+      "query": "claude opus 4.7",
+      "columns": ["rank","title","url"],
+      "rows": [
+        {"rank":1,"title":"Anthropic — Claude","url":"https://www.anthropic.com"},
+        {"rank":2,"title":"Claude API docs","url":"https://docs.claude.com"}
+      ]
+    },
+    "renderSpec": {"kind":"template","template":"search_table"}
+  }'
+
+# 2) Create a stats_dashboard artifact (auto-saved because category=stats? no —
+#    stats is daily-surfaced but not auto-saved. To auto-save, use category=portfolio.)
+curl -sS -X POST "$BASE/api/ui/artifacts" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Daily portfolio snapshot",
+    "category": "portfolio",
+    "viewType": "dashboard",
+    "source": {"operation":"portfolio_snapshot","transport":"stdio","trigger":"cron"},
+    "payload": {
+      "summary": "Markets up across the board.",
+      "kpis": [
+        {"label":"Portfolio","value":"$128,402","delta":"+1.8%","deltaLabel":"24h"},
+        {"label":"Top mover","value":"NVDA","delta":"+4.2%","deltaLabel":"day"},
+        {"label":"Cash","value":"$12,003","note":"available"}
+      ],
+      "sections": [{
+        "title":"Top holdings",
+        "columns":["ticker","value","change"],
+        "rows":[
+          {"ticker":"NVDA","value":"$42,000","change":"+4.2%"},
+          {"ticker":"AAPL","value":"$31,200","change":"+0.6%"}
+        ]
+      }]
+    },
+    "renderSpec": {"kind":"template","template":"stats_dashboard"}
+  }'
+
+# 3) List
+curl -sS "$BASE/api/ui/artifacts/list" -H "Authorization: Bearer $TOKEN"
+```
+
+The `POST` response contains the shareable URL — open it in a browser to see the rendered artifact, with **Save** / **Dismiss** buttons.
+
 ## GBrain (optional)
 
 When `GBRAIN_ENABLED=true`, `start.sh` clones `GBRAIN_REPO_URL` into `GBRAIN_DIR` (default `/data/gbrain`) and runs `bun install` + `bun link` so the `gbrain` CLI is available to Hermes.

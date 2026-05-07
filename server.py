@@ -1067,6 +1067,12 @@ async def ws_proxy(websocket: WebSocket) -> None:
 
 ANY_METHOD = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
 
+# GenUI artifact portal — kept in its own module so server.py stays focused
+# on Hermes-specific concerns. Returns a list of Route objects we splice in
+# below, before the catch-all reverse-proxy route.
+from genui import get_routes as _genui_get_routes  # noqa: E402
+_genui_routes = _genui_get_routes(templates, guard)
+
 routes = [
     # Public — no auth required.
     Route("/health",                            route_health),
@@ -1103,6 +1109,11 @@ routes = [
     WebSocketRoute("/api/pty",                  ws_proxy),
     WebSocketRoute("/api/ws",                   ws_proxy),
     WebSocketRoute("/api/events",               ws_proxy),
+
+    # GenUI artifact portal (/ui/* and /api/ui/*). MUST come before the
+    # catch-all proxy so /ui/* and /api/ui/* are claimed locally instead
+    # of forwarded to the Hermes dashboard.
+    *_genui_routes,
 
     # Root: redirect to /setup if unconfigured, otherwise proxy the dashboard.
     Route("/",                                  route_root,          methods=ANY_METHOD),

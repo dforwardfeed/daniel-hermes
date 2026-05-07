@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ art.title|default("UI Artifact") }} — Hermes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d0f14;color:#c9d1d9;font-family:'IBM Plex Sans',sans-serif;min-height:100vh;padding:24px;line-height:1.5}
+a{color:#6272ff;text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1100px;margin:0 auto}
+header.topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;border-bottom:1px solid #252d3d;padding-bottom:14px;margin-bottom:24px;flex-wrap:wrap}
+.title-block h1{font-size:22px;font-weight:600;color:#f0f6fc}
+.meta{font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6b7688;letter-spacing:.3px;margin-top:6px}
+.meta span+span:before{content:'·';margin:0 6px}
+.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.btn{font-family:'IBM Plex Mono',monospace;font-size:12px;padding:7px 14px;border-radius:6px;border:1px solid #252d3d;background:#14181f;color:#c9d1d9;cursor:pointer;transition:border-color .15s,background .15s}
+.btn:hover{border-color:#6272ff;color:#fff;text-decoration:none}
+.btn.primary{background:#6272ff;border-color:#6272ff;color:#fff}
+.btn.primary:hover{background:#7b8fff}
+.btn.danger{color:#f85149}
+.btn.danger:hover{border-color:#f85149;color:#f85149}
+a.btn{display:inline-flex;align-items:center}
+.card{background:#14181f;border:1px solid #252d3d;border-radius:10px;padding:18px;margin-bottom:14px}
+.muted{color:#6b7688}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #252d3d;vertical-align:top}
+th{font-family:'IBM Plex Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#6b7688;font-weight:500}
+tr:hover td{background:#10141a}
+.kpi{font-size:26px;font-weight:600;color:#f0f6fc}
+.kpi-label{font-family:'IBM Plex Mono',monospace;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#6b7688;margin-bottom:6px}
+.kpi-delta{font-family:'IBM Plex Mono',monospace;font-size:11px;margin-top:4px}
+.kpi-delta.up{color:#3fb950}.kpi-delta.down{color:#f85149}
+.tag{display:inline-block;font-family:'IBM Plex Mono',monospace;font-size:10px;padding:2px 6px;border-radius:4px;background:#1c2230;color:#9aa6b8;text-transform:uppercase;letter-spacing:.5px;margin-right:4px;margin-bottom:2px}
+.status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.status-dot.green{background:#3fb950}.status-dot.yellow{background:#d29922}.status-dot.red{background:#f85149}.status-dot.gray{background:#6b7688}.status-dot.blue{background:#6272ff}
+.timeline{border-left:2px solid #252d3d;padding-left:16px;margin-left:8px}
+.timeline-item{position:relative;padding-bottom:18px}
+.timeline-item:before{content:'';position:absolute;left:-22px;top:6px;width:10px;height:10px;border-radius:50%;background:#6272ff}
+.timeline-item .when{font-family:'IBM Plex Mono',monospace;font-size:10px;color:#6b7688;letter-spacing:.5px;text-transform:uppercase}
+.timeline-item h3{font-size:14px;font-weight:500;color:#f0f6fc;margin-top:2px}
+.timeline-item p{font-size:13px;color:#9aa6b8;margin-top:4px}
+.empty{padding:32px;text-align:center;color:#6b7688;font-family:'IBM Plex Mono',monospace;font-size:12px}
+.section-h{font-family:'IBM Plex Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#6b7688;margin:18px 0 8px}
+pre{background:#0a0c11;border:1px solid #252d3d;border-radius:6px;padding:10px;font-size:11px;overflow:auto;color:#9aa6b8;max-height:280px}
+.status-pill{display:inline-flex;align-items:center;font-family:'IBM Plex Mono',monospace;font-size:10px;padding:2px 8px;border-radius:10px;background:#1c2230;color:#9aa6b8;text-transform:uppercase;letter-spacing:.5px}
+.status-pill.saved{background:rgba(98,114,255,0.15);color:#7b8fff}
+.status-pill.temporary{background:rgba(210,153,34,0.15);color:#d29922}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="topbar">
+  <div class="title-block">
+    <h1>{{ art.title }}</h1>
+    <div class="meta">
+      <span class="status-pill {{ art.status }}">{{ art.status }}</span>
+      <span>{{ art.category }}</span>
+      <span>{{ art.viewType }}</span>
+      <span>{{ art.createdAt }}</span>
+      {% if art.source and art.source.operation %}<span>op: {{ art.source.operation }}</span>{% endif %}
+      <span>id: {{ art.id }}</span>
+    </div>
+  </div>
+  <div class="actions">
+    <a class="btn" href="/ui/saved">Library</a>
+    <a class="btn" href="/ui/daily">Daily</a>
+    {% if art.status != 'saved' %}
+    <button class="btn primary" id="genui-save-btn">Save</button>
+    {% endif %}
+    <button class="btn danger" id="genui-delete-btn">Dismiss</button>
+  </div>
+</header>
+
+{% block body %}{% endblock %}
+
+</div>
+<script>
+(function () {
+  var artId = {{ art.id|tojson }};
+  var saveBtn = document.getElementById('genui-save-btn');
+  var delBtn = document.getElementById('genui-delete-btn');
+  if (saveBtn) {
+    saveBtn.addEventListener('click', async function () {
+      saveBtn.disabled = true;
+      try {
+        var r = await fetch('/api/ui/artifacts/' + encodeURIComponent(artId) + '/save', { method: 'POST' });
+        if (r.ok) { saveBtn.textContent = 'Saved ✓'; saveBtn.classList.remove('primary'); }
+        else { saveBtn.textContent = 'Failed'; saveBtn.disabled = false; }
+      } catch (e) { saveBtn.textContent = 'Failed'; saveBtn.disabled = false; }
+    });
+  }
+  if (delBtn) {
+    delBtn.addEventListener('click', async function () {
+      if (!confirm('Dismiss this artifact?')) return;
+      delBtn.disabled = true;
+      try {
+        var r = await fetch('/api/ui/artifacts/' + encodeURIComponent(artId), { method: 'DELETE' });
+        if (r.ok) { window.location.href = '/ui/saved'; }
+        else { alert('Failed to dismiss'); delBtn.disabled = false; }
+      } catch (e) { alert('Failed to dismiss'); delBtn.disabled = false; }
+    });
+  }
+})();
+</script>
+</body>
+</html>

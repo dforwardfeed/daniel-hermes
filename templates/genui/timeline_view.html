@@ -1,0 +1,32 @@
+{% extends "genui/_base.html" %}
+{% block body %}
+{% set events = payload.get('events', []) %}
+{% set summary = payload.get('summary', '') %}
+
+{% if summary %}
+<div class="card">
+  <p style="color:#c9d1d9">{{ summary }}</p>
+</div>
+{% endif %}
+
+<div class="card">
+  {% if events %}
+  <div class="timeline">
+    {% for e in events %}
+    <div class="timeline-item">
+      <div class="when">{{ e.when or e.time or e.timestamp or '' }}</div>
+      <h3>{{ e.title or e.event or 'Event' }}</h3>
+      {% if e.detail or e.description %}<p>{{ e.detail or e.description }}</p>{% endif %}
+      {% if e.tags %}
+        <div style="margin-top:6px">
+          {% for t in e.tags %}<span class="tag">{{ t }}</span>{% endfor %}
+        </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty">No timeline events.</div>
+  {% endif %}
+</div>
+{% endblock %}
