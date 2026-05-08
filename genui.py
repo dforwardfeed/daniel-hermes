@@ -390,6 +390,17 @@ async def api_create(request: Request) -> Response:
         # Don't leak filesystem details to the caller.
         return JSONResponse({"error": "failed to persist artifact"}, status_code=500)
 
+    # Audit log — lets us see in deploy logs whether GBrain (or any caller)
+    # is actually POSTing artifacts. No payload contents, no token, just
+    # what + by whom.
+    auth_via = "bearer" if _has_api_token(request) else "cookie"
+    print(
+        f"[genui] created id={art['id']} template={art['renderSpec'].get('template') or art['renderSpec'].get('kind')} "
+        f"category={art['category']} status={art['status']} auth={auth_via} "
+        f"client={request.client.host if request.client else 'unknown'}",
+        flush=True,
+    )
+
     base = _base_url(request)
     return JSONResponse(
         {
@@ -494,6 +505,39 @@ def _format_y(value: float, fmt: str) -> str:
     return f"{value:,.2f}".rstrip("0").rstrip(".") or "0"
 
 
+def _axis_label(value) -> str:
+    """Coerce an axis spec to a display label.
+
+    Accepts either:
+      - A plain string label (`"Year"`) — what our README example uses.
+      - A dict with a `.label` field (`{"label":"Year","field":"x"}`) —
+        what GBrain's render_chart middleware emits.
+
+    Returns "" for anything else so the SVG just omits the axis title.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        lbl = value.get("label")
+        if isinstance(lbl, str):
+            return lbl
+    return ""
+
+
+def _y_format(payload: dict) -> str:
+    """Resolve the y-format hint from either `payload.y_format` (our README
+    shape) or `payload.y_axis.format` (GBrain's middleware shape)."""
+    fmt = payload.get("y_format")
+    if isinstance(fmt, str) and fmt:
+        return fmt
+    yaxis = payload.get("y_axis")
+    if isinstance(yaxis, dict):
+        nested = yaxis.get("format")
+        if isinstance(nested, str):
+            return nested
+    return ""
+
+
 def _prepare_line_chart_ctx(payload: dict) -> dict | None:
     """Pre-compute everything line_chart.html needs to render an SVG line
     chart from a validated payload. Returns None if the payload is so broken
@@ -539,7 +583,7 @@ def _prepare_line_chart_ctx(payload: dict) -> dict | None:
     plot_w = _LC_W - _LC_PL - _LC_PR
     plot_h = _LC_H - _LC_PT - _LC_PB
 
-    fmt = payload.get("y_format", "")
+    fmt = _y_format(payload)
 
     rendered_series = []
     for idx, s in enumerate(cleaned):
@@ -594,8 +638,8 @@ def _prepare_line_chart_ctx(payload: dict) -> dict | None:
         "series": rendered_series,
         "x_labels": x_labels,
         "y_ticks": y_ticks,
-        "x_axis_label": payload.get("x_axis", ""),
-        "y_axis_label": payload.get("y_axis", ""),
+        "x_axis_label": _axis_label(payload.get("x_axis")),
+        "y_axis_label": _axis_label(payload.get("y_axis")),
         "title": payload.get("title", ""),
         "source_slug": payload.get("source_slug", ""),
     }
