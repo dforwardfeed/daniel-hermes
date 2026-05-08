@@ -382,6 +382,26 @@ async def api_create(request: Request) -> Response:
 
     art, errs = _validate_create(body)
     if errs:
+        # Log validation failures to stdout so we can debug GBrain (or any
+        # caller) without needing access to the response body. We log:
+        #   - top-level keys we received (so we know if `payload` / `renderSpec`
+        #     /`source` are missing entirely vs malformed)
+        #   - the renderSpec.template if present (so we can tell which template
+        #     they were aiming at)
+        #   - the first 5 error messages verbatim — error strings are field
+        #     names + constraints, never values, so secrets can't leak.
+        body_keys = sorted(body.keys()) if isinstance(body, dict) else []
+        rs = body.get("renderSpec") if isinstance(body, dict) else None
+        attempted_template = (
+            rs.get("template") if isinstance(rs, dict) else None
+        ) or (rs.get("kind") if isinstance(rs, dict) else None)
+        client_host = request.client.host if request.client else "unknown"
+        print(
+            f"[genui] rejected POST (400) client={client_host} "
+            f"template={attempted_template!r} body_keys={body_keys} "
+            f"errs={errs[:5]}",
+            flush=True,
+        )
         return JSONResponse({"error": "validation failed", "details": errs}, status_code=400)
 
     try:
