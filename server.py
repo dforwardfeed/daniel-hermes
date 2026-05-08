@@ -35,6 +35,7 @@ from pathlib import Path
 import httpx
 import websockets
 import websockets.exceptions
+import yaml
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import (
@@ -156,26 +157,103 @@ def read_env(path: Path) -> dict[str, str]:
     return out
 
 
+GBRAIN_BIN = "/data/.bun/bin/gbrain"
+
+
+def _build_gbrain_mcp_entry() -> dict | None:
+    """Construct the GBrain stdio MCP server entry for config.yaml, or
+    None if GBrain isn't enabled / installed.
+
+    Hermes filters subprocess env down to a safe baseline (PATH, HOME, USER,
+    LANG, LC_ALL, TERM, SHELL, TMPDIR, XDG_*) — so anything GBrain's GenUI
+    middleware needs to call back into this server (the portal base URL,
+    the API token, the repo path) must be passed via the entry's `env:`
+    block. We forward GENUI_* and GBRAIN_* from os.environ — those are
+    namespaced, low-risk to forward, and cover what the GBrain side is
+    likely to read. Empty values are dropped.
+    """
+    if os.environ.get("GBRAIN_ENABLED", "false").lower() != "true":
+        return None
+    if not Path(GBRAIN_BIN).exists():
+        return None
+
+    forwarded_env: dict[str, str] = {}
+    for k, v in os.environ.items():
+        if (k.startswith("GENUI_") or k.startswith("GBRAIN_")) and v:
+            forwarded_env[k] = v
+
+    return {
+        "command": GBRAIN_BIN,
+        "args": ["serve"],
+        "env": forwarded_env,
+        # GBrain's first-call latency can be high (LLM warm-up + DB
+        # migration check). Hermes default is 120s/60s; bump to give
+        # us headroom without masking real failures.
+        "timeout": 180,
+        "connect_timeout": 90,
+    }
+
+
 def write_config_yaml(data: dict[str, str]) -> None:
-    """Write a minimal config.yaml so hermes picks up the model and provider."""
+    """Read-merge-write /data/.hermes/config.yaml.
+
+    Our managed keys (model, terminal, agent, data_dir, mcp_servers.gbrain)
+    are overwritten on every call. Any other top-level keys present in the
+    file are preserved — this lets a user add custom MCP servers, channel
+    configs, etc. via direct edits without us clobbering them.
+
+    Idempotent: callable from Gateway.start, api_config_put, lifespan().
+    """
     model = data.get("LLM_MODEL", "")
     config_path = Path(HERMES_HOME) / "config.yaml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(f"""\
-model:
-  default: "{model}"
-  provider: "auto"
 
-terminal:
-  backend: "local"
-  timeout: 60
-  cwd: "/tmp"
+    # Read existing config; tolerate missing file or malformed YAML.
+    existing: dict = {}
+    if config_path.exists():
+        try:
+            loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing = loaded
+        except (yaml.YAMLError, OSError) as e:
+            print(f"[hermes-config] existing config.yaml unreadable ({e!r}) — regenerating from scratch", flush=True)
+            existing = {}
 
-agent:
-  max_iterations: 50
+    # Managed keys — these are the source of truth; replace whatever was there.
+    existing["model"] = {"default": model, "provider": "auto"}
+    existing["terminal"] = {"backend": "local", "timeout": 60, "cwd": "/tmp"}
+    existing["agent"] = {"max_iterations": 50}
+    existing["data_dir"] = HERMES_HOME
 
-data_dir: "{HERMES_HOME}"
-""")
+    # mcp_servers: preserve other entries the user may have added; only
+    # touch the `gbrain` slot. If GBrain isn't enabled/installed, drop
+    # the slot so a stale entry doesn't try to spawn a missing binary.
+    mcp_servers = existing.get("mcp_servers")
+    if not isinstance(mcp_servers, dict):
+        mcp_servers = {}
+    gbrain_entry = _build_gbrain_mcp_entry()
+    if gbrain_entry is not None:
+        mcp_servers["gbrain"] = gbrain_entry
+        gbrain_status = (
+            f"registered (env_forwarded={len(gbrain_entry['env'])}, "
+            f"timeout={gbrain_entry['timeout']}s)"
+        )
+    else:
+        mcp_servers.pop("gbrain", None)
+        gbrain_status = (
+            f"skipped (GBRAIN_ENABLED={os.environ.get('GBRAIN_ENABLED','unset')}, "
+            f"binary_present={Path(GBRAIN_BIN).exists()})"
+        )
+    if mcp_servers:
+        existing["mcp_servers"] = mcp_servers
+    else:
+        existing.pop("mcp_servers", None)
+
+    config_path.write_text(
+        yaml.safe_dump(existing, sort_keys=False, default_flow_style=False),
+        encoding="utf-8",
+    )
+    print(f"[hermes-config] mcp_servers.gbrain: {gbrain_status}", flush=True)
 
 
 def write_env(path: Path, data: dict[str, str]) -> None:
@@ -912,6 +990,12 @@ async def auto_start():
 
 @asynccontextmanager
 async def lifespan(app):
+    # Refresh config.yaml on every boot so managed keys (model, MCP servers,
+    # data_dir) are present before the dashboard or gateway tries to read
+    # the file. Idempotent — if the gateway then auto-starts, it will call
+    # write_config_yaml again, which is fine.
+    write_config_yaml(read_env(ENV_FILE))
+
     # Dashboard runs always — it's the user-facing UI after setup is done,
     # and it's independent of gateway state.
     asyncio.create_task(dash.start())
