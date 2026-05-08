@@ -73,7 +73,15 @@ VALID_CATEGORIES = {
     "finance", "briefing", "search", "graph", "timeline", "jobs",
     "stats", "reports", "custom", "daily_briefing", "portfolio",
 }
-VALID_VIEW_TYPES = {"dashboard", "table", "graph", "timeline", "document", "status", "custom"}
+VALID_VIEW_TYPES = {
+    "dashboard", "table", "graph", "timeline", "document", "status", "custom",
+    # Chart-shaped views — accepted as cosmetic/semantic labels. The actual
+    # rendering choice is driven by renderSpec.template, not viewType, so
+    # being permissive here doesn't change rendering behavior; it just
+    # avoids 400ing legitimate chart artifacts that callers (e.g. GBrain's
+    # render_chart middleware) emit with these names.
+    "chart", "line_chart", "bar_chart", "pie_chart", "area_chart", "scatter_chart",
+}
 VALID_RENDER_KINDS = {"template", "json-render", "openui"}
 VALID_TRANSPORTS = {"stdio", "http", "unknown"}
 VALID_TRIGGERS = {"chat", "cron", "job", "manual"}
@@ -251,11 +259,15 @@ def _validate_create(body: dict) -> tuple[dict, list[str]]:
 
     category = body.get("category", "custom")
     if category not in VALID_CATEGORIES:
-        errs.append(f"category must be one of {sorted(VALID_CATEGORIES)}")
+        errs.append(
+            f"category={category!r} must be one of {sorted(VALID_CATEGORIES)}"
+        )
 
     view_type = body.get("viewType", "custom")
     if view_type not in VALID_VIEW_TYPES:
-        errs.append(f"viewType must be one of {sorted(VALID_VIEW_TYPES)}")
+        errs.append(
+            f"viewType={view_type!r} must be one of {sorted(VALID_VIEW_TYPES)}"
+        )
 
     payload = body.get("payload", {})
     if not isinstance(payload, dict):
