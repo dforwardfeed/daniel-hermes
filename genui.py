@@ -521,6 +521,10 @@ def _log_startup_banner() -> None:
     """One line in deploy logs so we can verify server-side env capture
     without leaking the token. Logs ONLY length and presence flags —
     never the value itself.
+
+    Also enumerates every GENUI_* env var actually visible to this process
+    so a missing/typoed token shows up in deploy logs without needing
+    container shell access.
     """
     print(
         f"[genui] enabled={'true' if GENUI_ENABLED else 'false'}"
@@ -532,6 +536,16 @@ def _log_startup_banner() -> None:
         f" token_auth={'enabled' if GENUI_API_TOKEN else 'disabled'}",
         flush=True,
     )
+    # Print every GENUI_* env var the container actually has, with byte
+    # length (NEVER the value). If GENUI_API_TOKEN is missing here, Railway
+    # didn't inject it; if it's here with len=0, Railway injected an empty
+    # string. Either way the truth is in this log line.
+    genui_keys = sorted(k for k in os.environ if k.startswith("GENUI_"))
+    if genui_keys:
+        summary = ", ".join(f"{k}(len={len(os.environ[k])})" for k in genui_keys)
+        print(f"[genui] visible_env: {summary}", flush=True)
+    else:
+        print("[genui] visible_env: <none — no GENUI_* vars in os.environ>", flush=True)
 
 
 def get_routes(
