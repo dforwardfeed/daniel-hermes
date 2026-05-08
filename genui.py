@@ -77,7 +77,14 @@ VALID_VIEW_TYPES = {"dashboard", "table", "graph", "timeline", "document", "stat
 VALID_RENDER_KINDS = {"template", "json-render", "openui"}
 VALID_TRANSPORTS = {"stdio", "http", "unknown"}
 VALID_TRIGGERS = {"chat", "cron", "job", "manual"}
-SUPPORTED_TEMPLATES = {"search_table", "stats_dashboard", "timeline_view", "jobs_status", "generic_cards"}
+SUPPORTED_TEMPLATES = {
+    "search_table",
+    "stats_dashboard",
+    "timeline_view",
+    "jobs_status",
+    "generic_cards",
+    "line_chart",
+}
 DAILY_CATEGORIES = {"daily_briefing", "briefing", "stats", "reports"}
 
 # `ui_` followed by URL-safe chars (no path traversal possible).
@@ -178,6 +185,56 @@ def _list_artifacts(
     return out
 
 
+# ── Per-template payload validators ───────────────────────────────────────────
+# Generic shape is enforced by _validate_create; these run on top for templates
+# whose renderer needs a more specific structure to produce sensible output.
+
+def _validate_line_chart_payload(payload: dict) -> list[str]:
+    """line_chart needs at least one series with at least one numeric point.
+    Each point must carry an `x` (any scalar; rendered as a label) and a `y`
+    (number, or string parseable as number). Returns a list of error strings;
+    empty == valid."""
+    errs: list[str] = []
+    series = payload.get("series")
+    if not isinstance(series, list) or not series:
+        errs.append("payload.series must be a non-empty array")
+        return errs
+    for i, s in enumerate(series):
+        if not isinstance(s, dict):
+            errs.append(f"payload.series[{i}] must be an object")
+            continue
+        if not s.get("name"):
+            errs.append(f"payload.series[{i}].name required (string)")
+        points = s.get("points")
+        if not isinstance(points, list) or not points:
+            errs.append(f"payload.series[{i}].points must be a non-empty array")
+            continue
+        for j, p in enumerate(points):
+            if not isinstance(p, dict):
+                errs.append(f"payload.series[{i}].points[{j}] must be an object")
+                continue
+            if "x" not in p:
+                errs.append(f"payload.series[{i}].points[{j}].x required")
+            if "y" not in p:
+                errs.append(f"payload.series[{i}].points[{j}].y required")
+            else:
+                try:
+                    float(p["y"])
+                except (TypeError, ValueError):
+                    errs.append(
+                        f"payload.series[{i}].points[{j}].y must be numeric "
+                        f"(got type {type(p['y']).__name__})"
+                    )
+    return errs
+
+
+# Map template name → optional payload validator. Adding a new entry here
+# wires per-template validation without touching _validate_create.
+_TEMPLATE_PAYLOAD_VALIDATORS: dict[str, "Callable[[dict], list[str]]"] = {
+    "line_chart": _validate_line_chart_payload,
+}
+
+
 # ── Validation ────────────────────────────────────────────────────────────────
 def _validate_create(body: dict) -> tuple[dict, list[str]]:
     """Return (artifact, errors). artifact is {} when errors is non-empty."""
@@ -217,6 +274,13 @@ def _validate_create(body: dict) -> tuple[dict, list[str]]:
             errs.append(
                 f"renderSpec.template must be one of {sorted(SUPPORTED_TEMPLATES)} for kind=template"
             )
+        elif isinstance(payload, dict):
+            # Per-template payload-shape validation (only runs when generic
+            # checks have passed enough that we have a valid template name
+            # and a dict payload to inspect).
+            extra = _TEMPLATE_PAYLOAD_VALIDATORS.get(tpl)
+            if extra is not None:
+                errs.extend(extra(payload))
     props = rs.get("props", {})
     if props is not None and not isinstance(props, dict):
         errs.append("renderSpec.props must be an object if provided")
@@ -406,6 +470,137 @@ async def api_delete(request: Request) -> Response:
     return JSONResponse({"ok": True})
 
 
+# ── line_chart SVG coordinate pre-compute ─────────────────────────────────────
+# Doing this in Python (rather than via Jinja math) keeps the template flat:
+# it just iterates pre-rendered series/x_labels/y_ticks. Pure function — no
+# I/O, no shared state — so it's trivial to unit-test.
+
+_LINE_CHART_PALETTE = ["#6272ff", "#3fb950", "#d29922", "#f85149", "#7b8fff", "#ff7eb6"]
+# SVG geometry: kept in one place so styling tweaks don't ripple through the template.
+_LC_W, _LC_H = 880, 380
+_LC_PL, _LC_PR, _LC_PT, _LC_PB = 90, 30, 30, 60  # padding: left/right/top/bottom
+
+
+def _format_y(value: float, fmt: str) -> str:
+    """Format a y-axis value per payload.y_format. Falls back to a sensible
+    numeric repr (no thousand separators — keeps the SVG narrow)."""
+    if fmt == "currency":
+        return f"${value:,.2f}" if abs(value) >= 1 else f"${value:.2f}"
+    if fmt == "percent":
+        return f"{value:.1f}%"
+    if fmt == "integer":
+        return f"{int(round(value)):,}"
+    # Default: drop trailing zeros for clean ticks.
+    return f"{value:,.2f}".rstrip("0").rstrip(".") or "0"
+
+
+def _prepare_line_chart_ctx(payload: dict) -> dict | None:
+    """Pre-compute everything line_chart.html needs to render an SVG line
+    chart from a validated payload. Returns None if the payload is so broken
+    that rendering would fail (caller falls back to error.html)."""
+    series_in = payload.get("series", [])
+    if not isinstance(series_in, list) or not series_in:
+        return None
+
+    # Coerce y to float; drop bad points silently (validator already ran upstream
+    # — anything that gets here should be well-formed, but be defensive).
+    cleaned: list[dict] = []
+    all_y: list[float] = []
+    for s in series_in:
+        if not isinstance(s, dict):
+            continue
+        points = s.get("points")
+        if not isinstance(points, list):
+            continue
+        cleaned_pts: list[dict] = []
+        for p in points:
+            if not isinstance(p, dict):
+                continue
+            try:
+                y = float(p.get("y"))
+            except (TypeError, ValueError):
+                continue
+            cleaned_pts.append({"x": p.get("x", ""), "y": y})
+            all_y.append(y)
+        if cleaned_pts:
+            cleaned.append({"name": s.get("name", ""), "points": cleaned_pts})
+
+    if not cleaned or not all_y:
+        return None
+
+    y_min, y_max = min(all_y), max(all_y)
+    if y_min == y_max:
+        # Flat data — pad so the line sits mid-chart, not flush against an axis.
+        pad = abs(y_max) * 0.1 or 1.0
+        y_min -= pad
+        y_max += pad
+    y_range = y_max - y_min
+
+    plot_w = _LC_W - _LC_PL - _LC_PR
+    plot_h = _LC_H - _LC_PT - _LC_PB
+
+    fmt = payload.get("y_format", "")
+
+    rendered_series = []
+    for idx, s in enumerate(cleaned):
+        n = len(s["points"])
+        coords = []
+        for i, p in enumerate(s["points"]):
+            x_pos = _LC_PL + (i / (n - 1)) * plot_w if n > 1 else _LC_PL + plot_w / 2
+            y_pos = _LC_PT + plot_h - ((p["y"] - y_min) / y_range) * plot_h
+            coords.append({
+                "x_pos": round(x_pos, 2),
+                "y_pos": round(y_pos, 2),
+                "x_label": str(p["x"]),
+                "y_value": p["y"],
+                "y_label": _format_y(p["y"], fmt),
+            })
+        rendered_series.append({
+            "name": s["name"],
+            "color": _LINE_CHART_PALETTE[idx % len(_LINE_CHART_PALETTE)],
+            "coords": coords,
+            "polyline": " ".join(f"{c['x_pos']},{c['y_pos']}" for c in coords),
+        })
+
+    # X-axis labels: take from the longest series so we cover the full timeline.
+    canonical = max(rendered_series, key=lambda s: len(s["coords"]))
+    x_labels = [
+        {"x_pos": c["x_pos"], "x_label": c["x_label"]}
+        for c in canonical["coords"]
+    ]
+
+    # Y-axis: 5 evenly-spaced ticks.
+    y_ticks = []
+    for i in range(5):
+        frac = i / 4
+        val = y_min + frac * y_range
+        y_pos = _LC_PT + plot_h - frac * plot_h
+        y_ticks.append({
+            "y_pos": round(y_pos, 2),
+            "y_label": _format_y(val, fmt),
+        })
+
+    return {
+        "W": _LC_W,
+        "H": _LC_H,
+        "PL": _LC_PL,
+        "PR": _LC_PR,
+        "PT": _LC_PT,
+        "PB": _LC_PB,
+        "plot_w": plot_w,
+        "plot_h": plot_h,
+        "y_min_label": _format_y(y_min, fmt),
+        "y_max_label": _format_y(y_max, fmt),
+        "series": rendered_series,
+        "x_labels": x_labels,
+        "y_ticks": y_ticks,
+        "x_axis_label": payload.get("x_axis", ""),
+        "y_axis_label": payload.get("y_axis", ""),
+        "title": payload.get("title", ""),
+        "source_slug": payload.get("source_slug", ""),
+    }
+
+
 # ── UI handlers ───────────────────────────────────────────────────────────────
 def _template_for(art: dict) -> str:
     rs = art.get("renderSpec", {}) or {}
@@ -420,17 +615,31 @@ def _template_for(art: dict) -> str:
 
 def _render_artifact(request: Request, art: dict) -> Response:
     assert _templates is not None
-    return _templates.TemplateResponse(
-        request,
-        _template_for(art),
-        {
-            "art": art,
-            "props": (art.get("renderSpec") or {}).get("props", {}) or {},
-            "payload": art.get("payload", {}) or {},
-            "kind": (art.get("renderSpec") or {}).get("kind", ""),
-            "supported_templates": sorted(SUPPORTED_TEMPLATES),
-        },
-    )
+    rs = art.get("renderSpec") or {}
+    payload = art.get("payload", {}) or {}
+    template_path = _template_for(art)
+
+    ctx: dict = {
+        "art": art,
+        "props": rs.get("props", {}) or {},
+        "payload": payload,
+        "kind": rs.get("kind", ""),
+        "supported_templates": sorted(SUPPORTED_TEMPLATES),
+    }
+
+    # Per-template context preparation. Add an entry here when a template
+    # needs computed view-model state (e.g. SVG coords for line_chart).
+    if rs.get("kind") == "template" and rs.get("template") == "line_chart":
+        chart_ctx = _prepare_line_chart_ctx(payload)
+        if chart_ctx is None:
+            # Validator should have caught this, but if a saved artifact
+            # somehow has a corrupt payload, fall back to the error template
+            # rather than 500ing.
+            template_path = "genui/error.html"
+        else:
+            ctx["chart"] = chart_ctx
+
+    return _templates.TemplateResponse(request, template_path, ctx)
 
 
 async def page_latest(request: Request) -> Response:

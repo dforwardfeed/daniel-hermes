@@ -121,9 +121,11 @@ The server hosts a small portal that stores structured **UI artifacts** as JSON 
 | `GET` | `/ui/saved/{id}` | Render saved artifact (404 if not saved) |
 | `GET` | `/ui/daily` | Latest in `daily_briefing` / `briefing` / `stats` / `reports` |
 
-### Render templates (MVP)
+### Render templates
 
-`renderSpec.kind = "template"` with one of: `search_table`, `stats_dashboard`, `timeline_view`, `jobs_status`, `generic_cards`. The other two kinds (`json-render`, `openui`) accept-and-store but render to a placeholder for now.
+`renderSpec.kind = "template"` with one of: `search_table`, `stats_dashboard`, `timeline_view`, `jobs_status`, `generic_cards`, `line_chart`. The other two kinds (`json-render`, `openui`) accept-and-store but render to a placeholder for now.
+
+`line_chart` validates `payload.series[*].points[*].{x,y}` (y must be numeric) and renders inline SVG with no external charting library. See `ARCHITECTURE.md` for the renderer flow.
 
 ### Auth
 
@@ -199,6 +201,35 @@ curl -sS -X POST "$BASE/api/ui/artifacts" \
 
 # 3) List
 curl -sS "$BASE/api/ui/artifacts/list" -H "Authorization: Bearer $TOKEN"
+
+# 4) Create a line_chart artifact (server-side SVG, no JS chart library)
+curl -sS -X POST "$BASE/api/ui/artifacts" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "MongoDB Stock Price Evolution",
+    "category": "finance",
+    "viewType": "graph",
+    "source": {"operation":"render_chart","transport":"stdio","trigger":"chat"},
+    "payload": {
+      "title": "MongoDB Stock Price Evolution",
+      "x_axis": "Year",
+      "y_axis": "Closing Price",
+      "y_format": "currency",
+      "source_slug": "mongodb_data",
+      "series": [{
+        "name": "Closing Price",
+        "points": [
+          {"x":"2018","y":83.74},  {"x":"2019","y":131.61},
+          {"x":"2020","y":359.04}, {"x":"2021","y":529.35},
+          {"x":"2022","y":196.84}, {"x":"2023","y":408.85},
+          {"x":"2024","y":232.81}, {"x":"2025","y":419.69},
+          {"x":"2026 (May)","y":293.42}
+        ]
+      }]
+    },
+    "renderSpec": {"kind":"template","template":"line_chart"}
+  }'
 ```
 
 The `POST` response contains the shareable URL — open it in a browser to see the rendered artifact, with **Save** / **Dismiss** buttons.
