@@ -81,6 +81,14 @@ VALID_VIEW_TYPES = {
     # avoids 400ing legitimate chart artifacts that callers (e.g. GBrain's
     # render_chart middleware) emit with these names.
     "chart", "line_chart", "bar_chart", "pie_chart", "area_chart", "scatter_chart",
+    # Card / markdown views — emitted by GBrain's UI_RULES for find_orphans,
+    # get_backlinks, and any LLM view-picker route that lands on
+    # generic_cards (TEMPLATE_CATALOG view: 'cards'). The viewType is
+    # cosmetic — actual rendering is still driven by renderSpec.template
+    # (e.g. generic_cards). Hermes-side docs already claim these are
+    # accepted (see gbrain/docs/genui-portal-templates.md); this catches
+    # the validator up with the documented contract.
+    "cards", "markdown",
 }
 VALID_RENDER_KINDS = {"template", "json-render", "openui"}
 VALID_TRANSPORTS = {"stdio", "http", "unknown"}
