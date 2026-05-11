@@ -22,7 +22,7 @@ ARG HERMES_REF=v2026.4.30
 # Node.js is required only at build time to compile the Hermes React dashboard.
 # We strip the source + apt lists afterwards to keep the image lean.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates git tini unzip && \
+    apt-get install -y --no-install-recommends curl ca-certificates git rsync tini unzip && \
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     rm -rf /var/lib/apt/lists/*
@@ -75,6 +75,15 @@ COPY templates/ /app/templates/
 COPY start.sh /app/start.sh
 COPY install_gbrain.sh /app/install_gbrain.sh
 RUN chmod +x /app/start.sh /app/install_gbrain.sh
+
+# Vendored GBrain (Dbrain-hermes) source — only consumed when GBRAIN_SOURCE=local.
+# With the default GBRAIN_SOURCE=remote, install_gbrain.sh ignores this tree
+# and clones from GitHub at boot exactly as before; the COPY is dead weight
+# in that case. ~63 MB at the time of vendoring; lives at the end of the
+# Dockerfile so changes to gbrain/ only bust the small tail of build layers,
+# preserving the heavy hermes-agent + ui-tui build cache.
+COPY gbrain/ /app/gbrain/
+COPY .gbrain-source-ref /app/gbrain/.source-ref
 
 ENV HOME=/data
 ENV HERMES_HOME=/data/.hermes
