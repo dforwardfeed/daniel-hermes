@@ -59,6 +59,12 @@ Storage is one JSON file per artifact. Status field (`temporary` | `saved`) cont
 | `jobs_status`     | generic            | `templates/genui/jobs_status.html`      | Job table with status pills               |
 | `generic_cards`   | generic            | `templates/genui/generic_cards.html`    | Heterogeneous card grid                   |
 | `line_chart`      | per-template       | `templates/genui/line_chart.html`       | **Hermes-side renderer** — inline SVG, no JS chart library; coords pre-computed in Python |
+| `bar_chart`       | per-template       | `templates/genui/bar_chart.html`        | Phase A — vertical bars; same payload contract as `line_chart`; baseline at 0 unless data is entirely negative |
+| `markdown_doc`    | per-template       | `templates/genui/markdown_doc.html`     | Phase A — markdown → safe HTML via python-markdown + bleach allowlist (tags + protocols). Raw HTML in source is stripped server-side |
+| `comparison_table`| per-template       | `templates/genui/comparison_table.html` | Phase A — two-column side-by-side compare; `highlight: left\|right\|tie` styles the winner |
+| `metric_callout`  | per-template       | `templates/genui/metric_callout.html`   | Phase A — single hero stat with optional delta + context |
+
+The portal also supports `renderSpec.kind = "json-render"` (Phase C — generative UI). Payload is a tree spec `{root, elements}` with typed components from a 15-name catalog (`Container`, `Card`, `Stack`, `Grid`, `Heading`, `Paragraph`, `Metric`, `Link`, `Tag`, `Badge`, `Code`, `Quote`, `KeyValueList`, `Image`, `Divider`). Renderer in `genui.py:_render_json_render_spec` + wrapper at `templates/genui/json_render.html`. Wire-compatible with [@json-render/core](https://github.com/vercel-labs/json-render) — a future client-side React renderer is a drop-in upgrade.
 
 A renderer is "Hermes-side" when this repo owns the rendering, regardless of which upstream component (GBrain, a cron job, manual curl) created the artifact. Adding a new template means:
 
@@ -67,8 +73,17 @@ A renderer is "Hermes-side" when this repo owns the rendering, regardless of whi
 3. (Optional) Add a context pre-compute helper and call it from `_render_artifact` for that template name.
 4. Create `templates/genui/<name>.html`. Extend `_base.html` to inherit the topbar + Save/Dismiss controls.
 5. Add a sample `curl` to `README.md`.
+6. **Mirror on the gbrain side** — add a `TEMPLATE_CATALOG` entry in `gbrain/src/mcp/ui-middleware.ts` so the view-picker can emit it, and add a `shape*` case in `shapePortalPayload` if non-trivial input-shape coercion is needed.
 
-Don't build a generic chart-library frontend until two more chart types are needed. A single `<svg>` keeps deploys deterministic and avoids the React/JS bundle drift that `openui` would invite.
+### Three render paths (Phase A/B/C)
+
+| Path | When the agent uses it | Where it lives |
+|---|---|---|
+| **Auto-render via UI_RULES** | The agent calls a tool (`search`, `get_stats`, `get_timeline`, `render_chart`, …) whose result has a renderable shape. Rule-based routing maps op → template. Phase A added 4 more templates (`bar_chart`, `markdown_doc`, `comparison_table`, `metric_callout`) so the view-picker has more options. | `gbrain/src/mcp/ui-middleware.ts:UI_RULES` + `templates/genui/*.html` |
+| **render_response (Phase B)** | The agent's text answer would be easier to read as a rendered markdown document — headings, tables, lists, citations. The LLM calls `mcp_gbrain_render_response` inline. No second classifier LLM. | `gbrain/src/core/operations.ts:render_response` → markdown_doc template |
+| **render_ui (Phase C)** | No fixed template captures the right structure. The LLM emits a full `{root, elements}` spec with typed components. Server-side renderer turns it into HTML. | `gbrain/src/core/operations.ts:render_ui` → `genui.py:_render_json_render_spec` |
+
+When choosing among the three at design time: prefer auto-render via UI_RULES (cheapest, fully validated). Reach for `render_response` when the answer is prose-shaped. Reach for `render_ui` only when neither fits — its per-element validation is stricter and the surface is larger.
 
 ## GBrain ↔ Hermes via MCP (stdio)
 

@@ -271,6 +271,117 @@ curl -sS -X POST "$BASE/api/ui/artifacts" \
     },
     "renderSpec": {"kind":"template","template":"line_chart"}
   }'
+
+# 5) markdown_doc — prose with safe HTML sanitization
+curl -sS -X POST "$BASE/api/ui/artifacts" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Weekly briefing",
+    "category": "briefing",
+    "viewType": "markdown",
+    "source": {"operation":"weekly_briefing","transport":"stdio","trigger":"cron"},
+    "payload": {
+      "summary": "Three things moved this week.",
+      "markdown": "# Weekly briefing\n\n## Highlights\n\n- **Acme Corp** announced Q3 results — revenue up 18%\n- Federal rate decision held steady at 4.5%\n- New ML paper on long-context reasoning ([link](https://example.com/paper))\n\n## What to watch\n\n| Event | When |\n|---|---|\n| Earnings calls | Next week |\n| Fed minutes | Friday |"
+    },
+    "renderSpec": {"kind":"template","template":"markdown_doc"}
+  }'
+
+# 6) comparison_table — A vs B side-by-side
+curl -sS -X POST "$BASE/api/ui/artifacts" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "PGLite vs Postgres",
+    "category": "custom",
+    "viewType": "table",
+    "source": {"operation":"compare","transport":"stdio","trigger":"chat"},
+    "payload": {
+      "summary": "Engine choice for personal-scale brains.",
+      "left": {"label": "PGLite", "sublabel": "embedded"},
+      "right": {"label": "Postgres", "sublabel": "managed"},
+      "rows": [
+        {"label": "Setup", "left": "Zero config", "right": "Service required", "highlight": "left"},
+        {"label": "Concurrency", "left": "Single writer", "right": "Multi", "highlight": "right"},
+        {"label": "Cost", "left": "Free", "right": "$5+/mo", "highlight": "left"}
+      ],
+      "verdict": "PGLite for <1000 docs; Postgres beyond that."
+    },
+    "renderSpec": {"kind":"template","template":"comparison_table"}
+  }'
+
+# 7) metric_callout — one big number with context
+curl -sS -X POST "$BASE/api/ui/artifacts" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Brain size",
+    "category": "stats",
+    "viewType": "dashboard",
+    "source": {"operation":"get_stats","transport":"stdio","trigger":"chat"},
+    "payload": {
+      "label": "Pages in brain",
+      "value": 1247,
+      "delta": "+34 this week",
+      "delta_kind": "up",
+      "context": "Mostly from the weekend backfill of Q3 meeting transcripts."
+    },
+    "renderSpec": {"kind":"template","template":"metric_callout"}
+  }'
+
+# 8) bar_chart — vertical bars, same payload contract as line_chart
+curl -sS -X POST "$BASE/api/ui/artifacts" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Revenue by quarter",
+    "category": "finance",
+    "viewType": "chart",
+    "source": {"operation":"render_chart","transport":"stdio","trigger":"chat"},
+    "payload": {
+      "title": "Revenue by quarter",
+      "x_axis": "Quarter",
+      "y_axis": "Revenue",
+      "y_format": "currency",
+      "series": [{
+        "name": "Revenue",
+        "points": [
+          {"x":"Q1","y":120000}, {"x":"Q2","y":145000},
+          {"x":"Q3","y":162000}, {"x":"Q4","y":189000}
+        ]
+      }]
+    },
+    "renderSpec": {"kind":"template","template":"bar_chart"}
+  }'
+
+# 9) json-render — generative UI (Phase C)
+curl -sS -X POST "$BASE/api/ui/artifacts" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Portfolio overview",
+    "category": "stats",
+    "viewType": "custom",
+    "source": {"operation":"render_ui","transport":"stdio","trigger":"chat"},
+    "payload": {
+      "root": "page",
+      "elements": {
+        "page":      {"type":"Stack","props":{"gap":16},"children":["intro","kpis","footer"]},
+        "intro":     {"type":"Card","props":{"title":"Portfolio overview"},"children":["lead"]},
+        "lead":      {"type":"Paragraph","props":{"text":"Markets recovered most of last week’s drawdown."}},
+        "kpis":      {"type":"Grid","props":{"columns":3},"children":["k1","k2","k3"]},
+        "k1":        {"type":"Card","props":{},"children":["m1"]},
+        "m1":        {"type":"Metric","props":{"label":"AUM","value":128402,"format":"currency","delta":"+1.8%","deltaKind":"up"}},
+        "k2":        {"type":"Card","props":{},"children":["m2"]},
+        "m2":        {"type":"Metric","props":{"label":"Top mover","value":"NVDA","delta":"+4.2%","deltaKind":"up"}},
+        "k3":        {"type":"Card","props":{},"children":["m3"]},
+        "m3":        {"type":"Metric","props":{"label":"Cash","value":12003,"format":"currency"}},
+        "footer":    {"type":"Paragraph","props":{"text":"Generated from get_stats at 09:00 ET.","muted":true}}
+      }
+    },
+    "renderSpec": {"kind":"json-render"}
+  }'
 ```
 
 The `POST` response contains the shareable URL — open it in a browser to see the rendered artifact, with **Save** / **Dismiss** buttons.
