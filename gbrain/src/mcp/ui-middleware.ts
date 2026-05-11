@@ -898,6 +898,147 @@ function detectYFormat(text: string): 'currency' | 'percent' | 'number' {
   return 'number';
 }
 
+// ── Phase A shape helpers ─────────────────────────────────────────────────────
+// All four follow the same pattern as the existing helpers: accept a few
+// input shapes that LLM tool outputs commonly take, normalize to the portal
+// contract documented in daniel-hermes/genui.py. Returning null means "no
+// recognizable shape" — the caller falls back to passing the raw result so
+// the portal's response_body explains the validator's complaint in logs.
+
+/**
+ * bar_chart shares the line_chart payload contract — same series/points
+ * structure, different visual rendering. Delegate to shapeLineChart so any
+ * caller that can produce a line_chart can also produce a bar_chart.
+ */
+export function shapeBarChart(
+  params: Record<string, unknown>,
+  result: unknown,
+): Record<string, unknown> | null {
+  return shapeLineChart(params, result);
+}
+
+/**
+ * Build a `markdown_doc` payload from any of these input shapes:
+ *   1. A plain string result → wrap as `{markdown: result}`.
+ *   2. An object with `markdown` (or `body`/`text`/`content`) field → forward.
+ *   3. An object with `_genui_template === 'markdown_doc'` → strip marker.
+ * Caller can override the payload by setting params._genui_markdown = "..."
+ * which wins over the result inference (lets a tool emit structured data AND
+ * a prose summary independently).
+ */
+export function shapeMarkdownDoc(
+  params: Record<string, unknown>,
+  result: unknown,
+): Record<string, unknown> | null {
+  // Explicit override on the call params.
+  if (typeof params._genui_markdown === 'string' && params._genui_markdown.trim()) {
+    return {
+      markdown: params._genui_markdown,
+      summary: typeof params._genui_summary === 'string' ? params._genui_summary : '',
+    };
+  }
+  // Handler already produced a markdown_doc payload.
+  if (isPlainObject(result) && result._genui_template === 'markdown_doc') {
+    const { _genui_template: _t, ...rest } = result as Record<string, unknown>;
+    return rest;
+  }
+  // String result → wrap directly.
+  if (typeof result === 'string' && result.trim()) {
+    return { markdown: result };
+  }
+  // Object with a markdown-shaped field.
+  if (isPlainObject(result)) {
+    const r = result as Record<string, unknown>;
+    for (const key of ['markdown', 'body', 'text', 'content'] as const) {
+      const v = r[key];
+      if (typeof v === 'string' && v.trim()) {
+        return {
+          markdown: v,
+          summary: typeof r.summary === 'string' ? r.summary : '',
+          sources: Array.isArray(r.sources) ? r.sources : undefined,
+        };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Build a `comparison_table` payload from:
+ *   1. An object already shaped {left, right, rows, ...} → forward.
+ *   2. An object with `_genui_template === 'comparison_table'` → strip marker.
+ *   3. An array of 2 objects each with {label, fields} → infer rows from
+ *      the intersection of their field keys.
+ */
+export function shapeComparisonTable(
+  _params: Record<string, unknown>,
+  result: unknown,
+): Record<string, unknown> | null {
+  if (isPlainObject(result) && result._genui_template === 'comparison_table') {
+    const { _genui_template: _t, ...rest } = result as Record<string, unknown>;
+    return rest;
+  }
+  if (isPlainObject(result) && isPlainObject((result as Record<string, unknown>).left)
+      && isPlainObject((result as Record<string, unknown>).right)
+      && Array.isArray((result as Record<string, unknown>).rows)) {
+    return result as Record<string, unknown>;
+  }
+  // Infer from a 2-item array of {label, fields}.
+  if (Array.isArray(result) && result.length === 2
+      && isPlainObject(result[0]) && isPlainObject(result[1])) {
+    const a = result[0] as Record<string, unknown>;
+    const b = result[1] as Record<string, unknown>;
+    const af = (a.fields as Record<string, unknown> | undefined) ?? {};
+    const bf = (b.fields as Record<string, unknown> | undefined) ?? {};
+    if (isPlainObject(af) && isPlainObject(bf)) {
+      const keys = Array.from(new Set([...Object.keys(af), ...Object.keys(bf)]));
+      const rows = keys.map(k => ({
+        label: k,
+        left:  af[k] ?? '—',
+        right: bf[k] ?? '—',
+      }));
+      return {
+        left:  { label: String(a.label || 'A') },
+        right: { label: String(b.label || 'B') },
+        rows,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Build a `metric_callout` payload from:
+ *   1. An object already shaped {value, ...} → forward.
+ *   2. An object with `_genui_template === 'metric_callout'` → strip marker.
+ *   3. A plain number → wrap as `{value: n}`.
+ *   4. An object with a single numeric field → use that field as value+label.
+ */
+export function shapeMetricCallout(
+  _params: Record<string, unknown>,
+  result: unknown,
+): Record<string, unknown> | null {
+  if (isPlainObject(result) && result._genui_template === 'metric_callout') {
+    const { _genui_template: _t, ...rest } = result as Record<string, unknown>;
+    return rest;
+  }
+  if (isPlainObject(result) && 'value' in (result as Record<string, unknown>)) {
+    return result as Record<string, unknown>;
+  }
+  if (typeof result === 'number' || typeof result === 'string') {
+    return { value: result };
+  }
+  if (isPlainObject(result)) {
+    const entries = Object.entries(result as Record<string, unknown>)
+      .filter(([_, v]) => typeof v === 'number' || typeof v === 'string');
+    if (entries.length === 1) {
+      const [k, v] = entries[0];
+      return { value: v, label: k };
+    }
+  }
+  return null;
+}
+
 export function shapePortalPayload(template: string, params: Record<string, unknown>, result: unknown): unknown {
   switch (template) {
     case 'search_table':    return shapeSearchTable(params, result);
@@ -911,6 +1052,12 @@ export function shapePortalPayload(template: string, params: Record<string, unkn
       // sent and the response_body in the artifact_post log explains why.
       return shaped ?? result;
     }
+    // Phase A additions — all four fall back to raw result on shape miss
+    // for the same reason as line_chart above.
+    case 'bar_chart':         return shapeBarChart(params, result) ?? result;
+    case 'markdown_doc':      return shapeMarkdownDoc(params, result) ?? result;
+    case 'comparison_table':  return shapeComparisonTable(params, result) ?? result;
+    case 'metric_callout':    return shapeMetricCallout(params, result) ?? result;
     default:                return result;
   }
 }
@@ -971,6 +1118,33 @@ export const TEMPLATE_CATALOG: TemplateCatalogEntry[] = [
     category: 'graph',
     view: 'cards',
     description: 'Card grid. Use for entity/page summaries with title + slug + description.',
+  },
+  // Phase A additions (daniel-hermes side already ships the renderers). These
+  // are always-available because the Hermes-side templates are unconditional
+  // in SUPPORTED_TEMPLATES — no env flag needed.
+  {
+    template: 'bar_chart',
+    category: 'finance',
+    view: 'chart',
+    description: 'Vertical bar chart for grouped numeric series. Shares the line_chart payload (series → points) — use when the data is categorical x-axis instead of sequential, or when comparing magnitudes per group is more important than showing a trend. Y values must be numbers.',
+  },
+  {
+    template: 'markdown_doc',
+    category: 'briefing',
+    view: 'markdown',
+    description: 'Free-form prose rendered from markdown. Use for summaries, briefings, analyses, narrative answers that benefit from headings, lists, links, tables, code blocks. Payload: { markdown: string, summary?: string, sources?: array, toc?: boolean }. Raw HTML in source is sanitized server-side via bleach allowlist. Highest-leverage option when no structured template fits.',
+  },
+  {
+    template: 'comparison_table',
+    category: 'briefing',
+    view: 'table',
+    description: 'Two-column side-by-side comparison. Use for "X vs Y" requests, before/after, this/that decisions. Payload: { left: {label, sublabel?}, right: {label, sublabel?}, rows: [{label, left, right, highlight?, note?}], summary?, verdict? }. highlight = "left" | "right" | "tie" styles the winner.',
+  },
+  {
+    template: 'metric_callout',
+    category: 'stats',
+    view: 'dashboard',
+    description: 'Single hero metric. Use for "what is my X?" answers where the answer is one number. Payload: { value: number|string, label?, delta?, delta_kind?: "up"|"down"|"neutral", context?, footnote?, sources? }. Numeric values get thousand-separator formatting; pass strings to render verbatim (e.g. "≈$1.2B", "42 of 100").',
   },
 ];
 
