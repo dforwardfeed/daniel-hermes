@@ -233,6 +233,12 @@ export const UI_RULES: Record<string, UiRule> = {
   // render_chart to produce a portal artifact URL. Skipped automatically by
   // decideRender's catalog check until GENUI_LINE_CHART=true on Hermes.
   render_chart:   { renderable: true,          category: 'finance',  defaultView: 'chart',     template: 'line_chart' },
+  // Phase B: agent-driven visualization gate. The LLM calls render_response
+  // when its OWN text answer would be more useful as a structured markdown
+  // artifact than as raw chat text. This is the closest thing to "smart
+  // auto-rendering" without an extra LLM classifier: the model already has
+  // the context to make the call, and emitting a tool call is cheap.
+  render_response: { renderable: true,         category: 'briefing', defaultView: 'markdown',  template: 'markdown_doc' },
 };
 
 // --- Config (read at call time) ---

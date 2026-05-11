@@ -1844,6 +1844,106 @@ const render_chart: Operation = {
   cliHints: { name: 'render-chart', hidden: true },
 };
 
+// --- Render response (Phase B: smart visualization gate) ---
+//
+// Phase B's answer to "the LLM should decide when text is better as UI" —
+// instead of running a separate post-response classifier (extra LLM call,
+// extra latency, extra cost), we expose a tool the agent can call when it
+// notices its own response would render better visually. The model already
+// has the context to make this call: it knows what the user asked, what it
+// found, and whether the answer is prose-shaped vs structured.
+//
+// Output is a markdown_doc artifact. That template carries the most data
+// per LLM call — headings, tables, lists, links, code, blockquotes, plus
+// any inline structure markdown supports. The Hermes-side renderer runs the
+// markdown through python-markdown + bleach (allowlisted tags + protocols)
+// so the agent cannot inject <script>/<iframe>/onclick.
+//
+// Caller should NOT use this for:
+//   - Charts → call render_chart (numeric series → line_chart) instead
+//   - Stats with multiple numeric fields → get_stats / get_health auto-route
+//   - Tabular search results → search auto-route
+//   - Single-stat answers → render_response can do it, but a future
+//     render_metric op (or letting the LLM emit a metric_callout payload
+//     directly) is cleaner.
+//
+// The renderable: true + template: 'markdown_doc' UI_RULES wiring lives in
+// gbrain/src/mcp/ui-middleware.ts.
+const render_response: Operation = {
+  name: 'render_response',
+  description:
+    'Wrap your prose response in a visual markdown artifact when text alone would be harder to read or scan. Call this when your answer benefits from structure: headings, lists, tables, code blocks, blockquotes, citations. The user gets a shareable URL with the rendered markdown plus a Save button so they can keep it long-term. Returns `{ui: {url, id}, ...}` — surface the URL in your reply. Use this any time you would naturally write more than ~3 short paragraphs OR your answer contains tabular data OR you cite multiple sources. Do NOT use this for charts (call render_chart) or for short single-fact replies.',
+  params: {
+    title: {
+      type: 'string',
+      required: true,
+      description: 'Artifact title shown in the rendered page header (e.g. "Q3 portfolio review — Acme + Widget Co").',
+    },
+    markdown: {
+      type: 'string',
+      required: true,
+      description: 'The full response body in CommonMark markdown. Supports headings (# ## ###), bold/italic, ordered + unordered lists, pipe tables, fenced code blocks (```lang ... ```), blockquotes (>), links, and images. Raw HTML is stripped server-side, so write everything in markdown syntax — don\'t embed <div>/<script>/<iframe> tags.',
+    },
+    summary: {
+      type: 'string',
+      description: 'Optional one-paragraph TL;DR shown above the main body in a separate card. Keep under 240 chars. Skip when the markdown itself is short.',
+    },
+    sources: {
+      type: 'array',
+      items: { type: 'object' },
+      description: 'Optional citation list rendered in a "Sources" card below the body. Each item: {url: string, title?: string, note?: string}. Use only when you actually have URLs the user can verify; otherwise omit.',
+    },
+    toc: {
+      type: 'boolean',
+      description: 'Set to true to render an inline table-of-contents from heading anchors. Useful for documents with 4+ H2 headings. Default false.',
+    },
+  },
+  scope: 'read',
+  handler: async (_ctx, p) => {
+    const markdown = typeof p.markdown === 'string' ? p.markdown : '';
+    if (!markdown.trim()) {
+      throw new OperationError(
+        'invalid_params',
+        '`markdown` must be a non-empty string. Pass the full response body in CommonMark.',
+      );
+    }
+    if (markdown.length > 500_000) {
+      throw new OperationError(
+        'invalid_params',
+        `\`markdown\` is ${markdown.length} chars — exceeds the 500000 cap. Split into multiple artifacts or summarize.`,
+      );
+    }
+    if (typeof p.title !== 'string' || !p.title.trim()) {
+      throw new OperationError('invalid_params', '`title` must be a non-empty string.');
+    }
+
+    // Optional fields — validate shape but tolerate omission.
+    const sources = Array.isArray(p.sources) ? p.sources : undefined;
+    if (sources !== undefined) {
+      for (let i = 0; i < sources.length; i++) {
+        const s = sources[i];
+        if (s !== null && typeof s !== 'object') {
+          throw new OperationError(
+            'invalid_params',
+            `\`sources[${i}]\` must be an object {url, title?, note?} or omitted entirely.`,
+          );
+        }
+      }
+    }
+
+    return {
+      // Marker the GenUI middleware reads to know the payload is already
+      // markdown-doc-shaped — shapeMarkdownDoc strips it and forwards the rest.
+      _genui_template: 'markdown_doc',
+      markdown,
+      ...(typeof p.summary === 'string' && p.summary.trim() ? { summary: p.summary } : {}),
+      ...(sources && sources.length > 0 ? { sources } : {}),
+      ...(p.toc === true ? { toc: true } : {}),
+    };
+  },
+  cliHints: { name: 'render-response', hidden: true },
+};
+
 // --- Orphans ---
 
 const find_orphans: Operation = {
@@ -2100,6 +2200,7 @@ export const operations: Operation[] = [
   find_orphans,
   // GenUI render ops
   render_chart,
+  render_response,
   // v0.28: Takes + think
   takes_list, takes_search, think,
   // v0.28: whoami + scoped sources management

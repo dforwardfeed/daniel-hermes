@@ -123,9 +123,30 @@ The server hosts a small portal that stores structured **UI artifacts** as JSON 
 
 ### Render templates
 
-`renderSpec.kind = "template"` with one of: `search_table`, `stats_dashboard`, `timeline_view`, `jobs_status`, `generic_cards`, `line_chart`. The other two kinds (`json-render`, `openui`) accept-and-store but render to a placeholder for now.
+`renderSpec.kind = "template"` with one of:
 
-`line_chart` validates `payload.series[*].points[*].{x,y}` (y must be numeric) and renders inline SVG with no external charting library. See `ARCHITECTURE.md` for the renderer flow.
+- **`search_table`** — tabular result list
+- **`stats_dashboard`** — KPI cards + sections
+- **`timeline_view`** — chronological events
+- **`jobs_status`** — job-board grouped by status
+- **`generic_cards`** — heterogeneous card grid (accepts `viewType: "cards"`)
+- **`line_chart`** — server-side SVG line chart; validates `payload.series[*].points[*].{x,y}` (y must be numeric)
+- **`bar_chart`** *(Phase A)* — server-side SVG bars; same payload contract as `line_chart`. Baseline at 0 unless data is entirely negative. Multi-series → grouped bars
+- **`markdown_doc`** *(Phase A)* — markdown → safe HTML. Runs the source through python-markdown (tables / fenced_code / sane_lists / optional toc) then bleach (allowlisted tags + protocols). Raw HTML in the source is stripped server-side. Payload: `{markdown: str, summary?: str, sources?: list, toc?: bool}`
+- **`comparison_table`** *(Phase A)* — two-column side-by-side. Payload: `{left: {label, sublabel?}, right: {label, sublabel?}, rows: [{label, left, right, highlight?, note?}], summary?, verdict?}` where `highlight = "left" | "right" | "tie"`
+- **`metric_callout`** *(Phase A)* — single hero stat. Payload: `{value: number|string, label?, delta?, delta_kind?: "up"|"down"|"neutral", context?, footnote?, sources?}`
+
+The other two kinds (`json-render`, `openui`) accept-and-store but render to a placeholder for now.
+
+### Agent-driven visualization (Phase B)
+
+GBrain ships `render_response` — a new MCP op the LLM calls when its own text answer would be more useful as a structured markdown artifact. The agent decides; no separate classifier LLM is involved. From a Telegram (or any chat) request:
+
+- "Summarize my notes about X" → agent calls `mcp_gbrain_render_response` with the summary as markdown → user gets a `/ui/latest/<id>` URL with the rendered doc + Save button.
+- "Compare A and B" → agent calls `render_response` with a markdown comparison table.
+- "Pros and cons of …" → same.
+
+The op's tool-description tells the agent *when* to call it: more than ~3 short paragraphs, tabular data, multiple citations. Charts still go through `render_chart` (numeric-y enforcement). Single-fact replies stay as plain text.
 
 ### Auth
 
