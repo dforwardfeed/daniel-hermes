@@ -239,6 +239,12 @@ export const UI_RULES: Record<string, UiRule> = {
   // auto-rendering" without an extra LLM classifier: the model already has
   // the context to make the call, and emitting a tool call is cheap.
   render_response: { renderable: true,         category: 'briefing', defaultView: 'markdown',  template: 'markdown_doc' },
+  // Phase C: generative-UI escape hatch. render_ui emits a json-render spec
+  // (tree of typed components) instead of a fixed-template payload. The
+  // template field here is a placeholder — maybeRenderUi detects the
+  // _genui_render_kind marker on the handler result and overrides
+  // renderSpec.kind to 'json-render', bypassing shapePortalPayload.
+  render_ui:       { renderable: true,         category: 'briefing', defaultView: 'custom',    template: 'markdown_doc' },
 };
 
 // --- Config (read at call time) ---
@@ -1387,7 +1393,33 @@ export async function maybeRenderUi(input: MaybeRenderUiInput): Promise<UiArtifa
   // response (`result`) is unchanged — only the artifact's `payload` field
   // is normalized so the portal can render directly without each template
   // re-deriving columns/rows from a heterogeneous shape.
-  const portalPayload = shapePortalPayload(decision.template!, input.params, input.result);
+  // Phase C: detect render_ui's json-render marker. When set, bypass the
+  // template-shaping path and emit a json-render artifact directly. The
+  // marker is the handler-side contract; only render_ui sets it today, but
+  // any future op that wants to emit a generative-UI spec can opt in by
+  // returning the same marker.
+  const isJsonRender =
+    isPlainObject(input.result) &&
+    (input.result as Record<string, unknown>)._genui_render_kind === 'json-render';
+
+  let portalPayload: unknown;
+  let renderSpec: { kind: 'template'; template: string; props: Record<string, unknown> }
+                | { kind: 'json-render'; props: Record<string, unknown> };
+
+  if (isJsonRender) {
+    // Strip the marker; the rest of the result IS the spec ({root, elements}).
+    const { _genui_render_kind: _k, ...spec } = input.result as Record<string, unknown>;
+    portalPayload = spec;
+    renderSpec = { kind: 'json-render', props: {} };
+  } else {
+    portalPayload = shapePortalPayload(decision.template!, input.params, input.result);
+    renderSpec = {
+      kind: 'template',
+      template: decision.template!,
+      props: {},
+    };
+  }
+
   const body = {
     title,
     category: decision.category!,
@@ -1400,11 +1432,7 @@ export async function maybeRenderUi(input: MaybeRenderUiInput): Promise<UiArtifa
       trigger: 'chat',
     },
     payload: portalPayload,
-    renderSpec: {
-      kind: 'template' as const,
-      template: decision.template!,
-      props: {},
-    },
+    renderSpec,
     createdAt: createdAt.toISOString(),
     expiresAt: expiresAt.toISOString(),
   };
@@ -1420,7 +1448,10 @@ export async function maybeRenderUi(input: MaybeRenderUiInput): Promise<UiArtifa
     const status: 'temporary' | 'saved' = resp.status === 'saved' ? 'saved' : 'temporary';
     const summary: UiArtifactSummary = {
       id: resp.id,
-      type: decision.template!,
+      // For json-render artifacts the "type" is the render kind, not a
+      // template name (the placeholder template in UI_RULES is moot —
+      // body.renderSpec.kind is what the portal actually persisted).
+      type: isJsonRender ? 'json-render' : decision.template!,
       category: decision.category!,
       title,
       url,

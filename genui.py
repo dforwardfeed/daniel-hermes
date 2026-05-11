@@ -338,6 +338,553 @@ _TEMPLATE_PAYLOAD_VALIDATORS: dict[str, "Callable[[dict], list[str]]"] = {
 }
 
 
+# ── Phase C: server-side json-render kind ─────────────────────────────────────
+# Generative UI inspired by Vercel Labs' @json-render/core library, but
+# rendered server-side in Python so the deploy stays HTML-only (no React
+# bundle, no JS build pipeline). Spec format is wire-compatible with the
+# json-render React renderer — a future Hermes upgrade can serve the same
+# artifacts to a client-side bundle without changing the gbrain emitter.
+#
+# Wire format (lifted from json-render docs):
+#   {
+#     "root": "<element_id>",
+#     "elements": {
+#       "<element_id>": {
+#         "type": "<ComponentName>",   // must be in JSON_RENDER_CATALOG
+#         "props": { ... },             // shape per component's schema
+#         "children": ["<id>", ...]     // optional, list of child IDs
+#       },
+#       ...
+#     }
+#   }
+#
+# Safety design:
+#   - Every string prop is html-escaped before emission.
+#   - href / src values must use http, https, mailto, or tel — same allowlist
+#     as the markdown_doc renderer. javascript: / data: rejected at validate.
+#   - Hard caps on element count + recursion depth so a hostile spec can't
+#     exhaust memory or stack.
+#   - Cycle detection: an element can appear at most once in the rendered
+#     output. Revisiting an id during traversal = rejected at validate.
+#   - Unknown component types → validator rejects (NOT a placeholder render).
+#     This is intentional: a typo'd component shouldn't silently disappear.
+
+JSON_RENDER_MAX_ELEMENTS = 500
+JSON_RENDER_MAX_DEPTH = 20
+_JR_ALLOWED_PROTOCOLS = ("http://", "https://", "mailto:", "tel:")
+
+
+def _jr_escape(value) -> str:
+    """HTML-escape a prop value for inline emission. Coerces non-strings via
+    str() then escapes — handles numbers, bools, None safely."""
+    import html as _html
+    if value is None:
+        return ""
+    return _html.escape(str(value), quote=True)
+
+
+def _jr_check_url(href: str) -> bool:
+    """Allow only the four protocols the markdown_doc renderer permits.
+    Bare protocol-relative (//evil.com), data:, javascript:, file: all
+    rejected."""
+    if not isinstance(href, str) or not href:
+        return False
+    lower = href.lower().lstrip()
+    # Relative paths starting with / are allowed (in-app links).
+    if lower.startswith("/") and not lower.startswith("//"):
+        return True
+    return any(lower.startswith(p) for p in _JR_ALLOWED_PROTOCOLS)
+
+
+# Component catalog. Each entry declares:
+#   required_props: set of prop names that MUST be present (string-typed)
+#   optional_props: set of prop names that MAY be present
+#   url_props:      subset whose values must pass _jr_check_url
+#   enum_props:     dict of prop name → tuple of allowed values
+#   container:      True if the component renders its children (others ignore
+#                   the children: [] field — declared so validators don't fail
+#                   when a caller emits it anyway)
+JSON_RENDER_CATALOG: dict[str, dict] = {
+    # ── Layout
+    "Container": {
+        "optional_props": {"padding", "maxWidth", "background"},
+        "container": True,
+    },
+    "Card": {
+        "optional_props": {"title", "tag"},
+        "container": True,
+    },
+    "Stack": {
+        "optional_props": {"direction", "gap", "align"},
+        "enum_props": {"direction": ("row", "column"), "align": ("start", "center", "end", "stretch")},
+        "container": True,
+    },
+    "Grid": {
+        "optional_props": {"columns", "gap", "minWidth"},
+        "container": True,
+    },
+    "Divider": {"container": False},
+
+    # ── Text
+    "Heading": {
+        "required_props": {"text"},
+        "optional_props": {"level"},
+        "enum_props": {"level": ("h1", "h2", "h3", "h4", "h5", "h6")},
+        "container": False,
+    },
+    "Paragraph": {
+        "required_props": {"text"},
+        "optional_props": {"muted"},
+        "container": False,
+    },
+    "Code": {
+        "required_props": {"code"},
+        "optional_props": {"lang"},
+        "container": False,
+    },
+    "Quote": {
+        "required_props": {"text"},
+        "optional_props": {"source"},
+        "container": False,
+    },
+    "Link": {
+        "required_props": {"href", "text"},
+        "optional_props": {"target"},
+        "url_props": {"href"},
+        "enum_props": {"target": ("_blank", "_self")},
+        "container": False,
+    },
+
+    # ── Data
+    "Metric": {
+        "required_props": {"label", "value"},
+        "optional_props": {"delta", "deltaKind", "format"},
+        "enum_props": {
+            "deltaKind": ("up", "down", "neutral"),
+            "format": ("number", "currency", "percent", "string"),
+        },
+        "container": False,
+    },
+    "KeyValueList": {
+        "required_props": {"items"},  # items: list of {key, value}
+        "container": False,
+    },
+    "Tag": {
+        "required_props": {"text"},
+        "container": False,
+    },
+    "Badge": {
+        "required_props": {"text"},
+        "optional_props": {"kind"},
+        "enum_props": {"kind": ("success", "warning", "error", "info", "neutral")},
+        "container": False,
+    },
+
+    # ── Media
+    "Image": {
+        "required_props": {"src", "alt"},
+        "optional_props": {"width", "height"},
+        "url_props": {"src"},
+        "container": False,
+    },
+}
+
+
+def _validate_json_render_payload(payload: dict) -> list[str]:
+    """Validate a json-render spec. Returns a list of human-readable error
+    strings; empty list means valid. Errors mention the offending element id
+    + prop name so the LLM can self-correct on retry."""
+    errs: list[str] = []
+    if not isinstance(payload, dict):
+        errs.append("payload must be an object with `root` and `elements`")
+        return errs
+
+    root_id = payload.get("root")
+    elements = payload.get("elements")
+
+    if not isinstance(root_id, str) or not root_id:
+        errs.append("payload.root required (non-empty string)")
+    if not isinstance(elements, dict) or not elements:
+        errs.append("payload.elements required (non-empty object keyed by id)")
+        return errs
+
+    if len(elements) > JSON_RENDER_MAX_ELEMENTS:
+        errs.append(
+            f"payload.elements has {len(elements)} entries — exceeds the "
+            f"{JSON_RENDER_MAX_ELEMENTS} cap. Simplify the spec."
+        )
+        return errs
+
+    if root_id not in elements:
+        errs.append(f"payload.root={root_id!r} not present in payload.elements")
+        # Continue so we still flag bad element shapes below.
+
+    # Validate every element's shape + component-specific schema.
+    for elem_id, elem in elements.items():
+        if not isinstance(elem_id, str) or not elem_id:
+            errs.append(f"elements key must be a non-empty string (saw {elem_id!r})")
+            continue
+        if not isinstance(elem, dict):
+            errs.append(f"elements[{elem_id!r}] must be an object")
+            continue
+        comp = elem.get("type")
+        if comp not in JSON_RENDER_CATALOG:
+            errs.append(
+                f"elements[{elem_id!r}].type={comp!r} not in catalog. "
+                f"Allowed: {sorted(JSON_RENDER_CATALOG)}"
+            )
+            continue
+
+        schema = JSON_RENDER_CATALOG[comp]
+        props = elem.get("props") or {}
+        if not isinstance(props, dict):
+            errs.append(f"elements[{elem_id!r}].props must be an object")
+            continue
+
+        # Required props present?
+        for rp in schema.get("required_props", set()):
+            if rp not in props:
+                errs.append(f"elements[{elem_id!r}].props.{rp} required for type={comp}")
+
+        # Enum props within allowed values?
+        for ep, allowed in schema.get("enum_props", {}).items():
+            if ep in props and props[ep] not in allowed:
+                errs.append(
+                    f"elements[{elem_id!r}].props.{ep}={props[ep]!r} must be one of {list(allowed)}"
+                )
+
+        # URL props pass protocol allowlist?
+        for up in schema.get("url_props", set()):
+            if up in props and not _jr_check_url(props[up]):
+                errs.append(
+                    f"elements[{elem_id!r}].props.{up}={props[up]!r} must use http://, "
+                    f"https://, mailto:, tel:, or be a relative path starting with /"
+                )
+
+        # KeyValueList.items shape — easier to validate inline than as a generic recursive schema.
+        if comp == "KeyValueList":
+            items = props.get("items")
+            if not isinstance(items, list):
+                errs.append(f"elements[{elem_id!r}].props.items must be a list")
+            else:
+                for j, it in enumerate(items):
+                    if not isinstance(it, dict) or "key" not in it or "value" not in it:
+                        errs.append(
+                            f"elements[{elem_id!r}].props.items[{j}] must be "
+                            "an object with `key` and `value`"
+                        )
+
+        # Children references all resolve?
+        children = elem.get("children")
+        if children is not None:
+            if not isinstance(children, list):
+                errs.append(f"elements[{elem_id!r}].children must be a list or omitted")
+            else:
+                for cidx, child_id in enumerate(children):
+                    if not isinstance(child_id, str):
+                        errs.append(
+                            f"elements[{elem_id!r}].children[{cidx}] must be a string id"
+                        )
+                    elif child_id not in elements:
+                        errs.append(
+                            f"elements[{elem_id!r}].children[{cidx}]={child_id!r} "
+                            "does not exist in elements"
+                        )
+
+    # Reachability + cycle / depth detection — only run if no structural errors
+    # above (otherwise the traversal would produce noise on already-broken specs).
+    if not errs and root_id in elements:
+        seen: set[str] = set()
+        def walk(node_id: str, depth: int) -> None:
+            if depth > JSON_RENDER_MAX_DEPTH:
+                errs.append(
+                    f"render depth exceeded {JSON_RENDER_MAX_DEPTH} levels "
+                    f"(at {node_id!r}); reduce nesting"
+                )
+                return
+            if node_id in seen:
+                errs.append(
+                    f"cycle or duplicate reference at element {node_id!r} — "
+                    "each element may be rendered at most once"
+                )
+                return
+            seen.add(node_id)
+            elem = elements.get(node_id) or {}
+            comp = elem.get("type")
+            schema = JSON_RENDER_CATALOG.get(comp, {})
+            if schema.get("container"):
+                for cid in elem.get("children") or []:
+                    if isinstance(cid, str) and cid in elements:
+                        walk(cid, depth + 1)
+        walk(root_id, 0)
+
+    return errs
+
+
+# ── json-render renderers ─────────────────────────────────────────────────────
+# One render function per component. Each takes a props dict (already
+# validated upstream) and a pre-rendered children HTML string, returns the
+# HTML for this element. CSS classes piggy-back on _base.html's design tokens
+# (`card`, `tag`, `kpi`, `status-pill`, etc.) so json-render output looks at
+# home next to template-rendered artifacts.
+
+def _jr_render_Container(props: dict, children: str) -> str:
+    style_parts = []
+    if "padding" in props:
+        # Accept either a number (treated as px) or a string CSS length.
+        v = props["padding"]
+        if isinstance(v, (int, float)):
+            style_parts.append(f"padding:{int(v)}px")
+        elif isinstance(v, str):
+            style_parts.append(f"padding:{_jr_escape(v)}")
+    if "maxWidth" in props:
+        v = props["maxWidth"]
+        if isinstance(v, (int, float)):
+            style_parts.append(f"max-width:{int(v)}px")
+        elif isinstance(v, str):
+            style_parts.append(f"max-width:{_jr_escape(v)}")
+    if "background" in props and isinstance(props["background"], str):
+        style_parts.append(f"background:{_jr_escape(props['background'])}")
+    style = f' style="{";".join(style_parts)}"' if style_parts else ""
+    return f'<div class="jr-container"{style}>{children}</div>'
+
+
+def _jr_render_Card(props: dict, children: str) -> str:
+    title = props.get("title")
+    tag = props.get("tag")
+    parts = ['<div class="card">']
+    if tag:
+        parts.append(f'<span class="tag">{_jr_escape(tag)}</span>')
+    if title:
+        parts.append(f'<h3 style="font-size:15px;font-weight:500;color:#f0f6fc;margin:6px 0 8px">{_jr_escape(title)}</h3>')
+    parts.append(children)
+    parts.append('</div>')
+    return "".join(parts)
+
+
+def _jr_render_Stack(props: dict, children: str) -> str:
+    direction = props.get("direction", "column")
+    gap = props.get("gap", 12)
+    align = props.get("align", "stretch")
+    gap_px = int(gap) if isinstance(gap, (int, float)) else 12
+    return (
+        f'<div style="display:flex;flex-direction:{_jr_escape(direction)};'
+        f'gap:{gap_px}px;align-items:{_jr_escape(align)}">{children}</div>'
+    )
+
+
+def _jr_render_Grid(props: dict, children: str) -> str:
+    columns = props.get("columns")
+    gap = props.get("gap", 14)
+    min_width = props.get("minWidth", 220)
+    gap_px = int(gap) if isinstance(gap, (int, float)) else 14
+    min_px = int(min_width) if isinstance(min_width, (int, float)) else 220
+    if isinstance(columns, int) and columns > 0:
+        tmpl = f"repeat({columns}, 1fr)"
+    else:
+        tmpl = f"repeat(auto-fit, minmax({min_px}px, 1fr))"
+    return f'<div style="display:grid;grid-template-columns:{tmpl};gap:{gap_px}px">{children}</div>'
+
+
+def _jr_render_Divider(_props: dict, _children: str) -> str:
+    return '<hr style="border:none;border-top:1px solid #252d3d;margin:18px 0">'
+
+
+def _jr_render_Heading(props: dict, _children: str) -> str:
+    level = props.get("level", "h2")
+    return f"<{level} style=\"color:#f0f6fc;font-weight:600;margin:14px 0 8px\">{_jr_escape(props.get('text'))}</{level}>"
+
+
+def _jr_render_Paragraph(props: dict, _children: str) -> str:
+    cls = "muted" if props.get("muted") else ""
+    cls_attr = f' class="{cls}"' if cls else ""
+    return f'<p{cls_attr} style="font-size:14px;margin:8px 0">{_jr_escape(props.get("text"))}</p>'
+
+
+def _jr_render_Code(props: dict, _children: str) -> str:
+    lang = props.get("lang", "")
+    lang_attr = f' data-lang="{_jr_escape(lang)}"' if lang else ""
+    return f'<pre{lang_attr}><code>{_jr_escape(props.get("code"))}</code></pre>'
+
+
+def _jr_render_Quote(props: dict, _children: str) -> str:
+    src = props.get("source")
+    src_html = (
+        f'<footer style="margin-top:6px;font-size:11px;color:#6b7688">— {_jr_escape(src)}</footer>'
+        if src else ""
+    )
+    return (
+        '<blockquote style="border-left:3px solid #6272ff;padding:6px 14px;margin:12px 0;'
+        f'color:#9aa6b8;font-style:italic;background:rgba(98,114,255,0.04);border-radius:0 6px 6px 0">'
+        f"<p>{_jr_escape(props.get('text'))}</p>{src_html}</blockquote>"
+    )
+
+
+def _jr_render_Link(props: dict, _children: str) -> str:
+    target = props.get("target", "_self")
+    rel = ' rel="noopener"' if target == "_blank" else ""
+    return (
+        f'<a href="{_jr_escape(props["href"])}" target="{_jr_escape(target)}"{rel}>'
+        f'{_jr_escape(props.get("text"))}</a>'
+    )
+
+
+def _jr_format_metric(value, fmt: str) -> str:
+    """Format a Metric value per the format prop. Mirrors line_chart's
+    _format_y but with a wider input type set (Metric accepts strings)."""
+    if fmt in ("currency", "percent", "number") and isinstance(value, (int, float)):
+        if fmt == "currency":
+            return f"${value:,.2f}" if abs(value) >= 1 else f"${value:.2f}"
+        if fmt == "percent":
+            return f"{value:.1f}%"
+        if isinstance(value, int):
+            return f"{value:,}"
+        return f"{value:,.2f}".rstrip("0").rstrip(".") or "0"
+    return str(value)
+
+
+def _jr_render_Metric(props: dict, _children: str) -> str:
+    fmt = props.get("format", "number")
+    val = _jr_format_metric(props.get("value"), fmt)
+    delta = props.get("delta")
+    delta_kind = props.get("deltaKind", "neutral")
+    delta_html = ""
+    if delta:
+        cls = "up" if delta_kind == "up" else ("down" if delta_kind == "down" else "")
+        delta_html = f'<div class="kpi-delta {cls}">{_jr_escape(delta)}</div>'
+    return (
+        '<div>'
+        f'<div class="kpi-label">{_jr_escape(props.get("label"))}</div>'
+        f'<div class="kpi">{_jr_escape(val)}</div>'
+        f'{delta_html}'
+        '</div>'
+    )
+
+
+def _jr_render_KeyValueList(props: dict, _children: str) -> str:
+    items = props.get("items") or []
+    rows = []
+    for it in items:
+        rows.append(
+            '<dt class="muted" style="font-family:\'IBM Plex Mono\',monospace;'
+            'font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin-top:8px">'
+            f"{_jr_escape(it.get('key'))}</dt>"
+            f'<dd style="color:#c9d1d9;font-size:13px">{_jr_escape(it.get("value"))}</dd>'
+        )
+    return f'<dl style="margin:0">{"".join(rows)}</dl>'
+
+
+def _jr_render_Tag(props: dict, _children: str) -> str:
+    return f'<span class="tag">{_jr_escape(props.get("text"))}</span>'
+
+
+def _jr_render_Badge(props: dict, _children: str) -> str:
+    kind = props.get("kind", "neutral")
+    # Map our 5 kinds to existing CSS classes when possible, else inline color.
+    if kind == "success":
+        return f'<span class="status-pill saved">{_jr_escape(props.get("text"))}</span>'
+    if kind == "warning":
+        return f'<span class="status-pill temporary">{_jr_escape(props.get("text"))}</span>'
+    if kind == "error":
+        return (
+            '<span class="status-pill" style="background:rgba(248,81,73,0.15);color:#f85149">'
+            f'{_jr_escape(props.get("text"))}</span>'
+        )
+    if kind == "info":
+        return (
+            '<span class="status-pill" style="background:rgba(98,114,255,0.15);color:#7b8fff">'
+            f'{_jr_escape(props.get("text"))}</span>'
+        )
+    return f'<span class="status-pill">{_jr_escape(props.get("text"))}</span>'
+
+
+def _jr_render_Image(props: dict, _children: str) -> str:
+    w = props.get("width")
+    h = props.get("height")
+    w_attr = f' width="{int(w)}"' if isinstance(w, (int, float)) else ""
+    h_attr = f' height="{int(h)}"' if isinstance(h, (int, float)) else ""
+    return (
+        f'<img src="{_jr_escape(props["src"])}" alt="{_jr_escape(props.get("alt"))}"'
+        f'{w_attr}{h_attr} style="max-width:100%;height:auto;border-radius:6px">'
+    )
+
+
+_JR_RENDERERS = {
+    "Container":    _jr_render_Container,
+    "Card":         _jr_render_Card,
+    "Stack":        _jr_render_Stack,
+    "Grid":         _jr_render_Grid,
+    "Divider":      _jr_render_Divider,
+    "Heading":      _jr_render_Heading,
+    "Paragraph":    _jr_render_Paragraph,
+    "Code":         _jr_render_Code,
+    "Quote":        _jr_render_Quote,
+    "Link":         _jr_render_Link,
+    "Metric":       _jr_render_Metric,
+    "KeyValueList": _jr_render_KeyValueList,
+    "Tag":          _jr_render_Tag,
+    "Badge":        _jr_render_Badge,
+    "Image":        _jr_render_Image,
+}
+
+
+def _render_json_render_spec(payload: dict) -> str | None:
+    """Render a validated json-render spec to an HTML string. Returns None
+    if the spec is unrenderable for any reason (validator should have caught
+    it, but be defensive — stale saved artifacts can drift past the
+    validator). Recursive but capped by JSON_RENDER_MAX_DEPTH at validate
+    time so we know we won't blow the stack."""
+    root_id = payload.get("root")
+    elements = payload.get("elements") or {}
+    if not isinstance(root_id, str) or not isinstance(elements, dict):
+        return None
+    if root_id not in elements:
+        return None
+
+    rendered: dict[str, str] = {}
+
+    def render_node(node_id: str, depth: int) -> str:
+        if depth > JSON_RENDER_MAX_DEPTH:
+            return ""
+        if node_id in rendered:
+            return rendered[node_id]
+        elem = elements.get(node_id)
+        if not isinstance(elem, dict):
+            return ""
+        comp = elem.get("type")
+        renderer = _JR_RENDERERS.get(comp)
+        if renderer is None:
+            return ""
+        props = elem.get("props") or {}
+        schema = JSON_RENDER_CATALOG.get(comp, {})
+        # Recurse children for container components only.
+        children_html = ""
+        if schema.get("container"):
+            child_ids = elem.get("children") or []
+            children_html = "".join(
+                render_node(cid, depth + 1) for cid in child_ids if isinstance(cid, str)
+            )
+        out = renderer(props, children_html)
+        rendered[node_id] = out
+        return out
+
+    try:
+        return render_node(root_id, 0)
+    except Exception as e:
+        print(f"[genui][json-render] render failed for root={root_id!r}: {e!r}", flush=True)
+        return None
+
+
+def _prepare_json_render_ctx(payload: dict) -> dict | None:
+    html = _render_json_render_spec(payload)
+    if html is None:
+        return None
+    return {
+        "html": html,
+        "element_count": len(payload.get("elements") or {}),
+    }
+
+
 # ── Validation ────────────────────────────────────────────────────────────────
 def _validate_create(body: dict) -> tuple[dict, list[str]]:
     """Return (artifact, errors). artifact is {} when errors is non-empty."""
@@ -388,6 +935,12 @@ def _validate_create(body: dict) -> tuple[dict, list[str]]:
             extra = _TEMPLATE_PAYLOAD_VALIDATORS.get(tpl)
             if extra is not None:
                 errs.extend(extra(payload))
+    elif kind == "json-render":
+        # Phase C — server-side generative UI. Payload IS the spec
+        # ({root, elements}). Validate against the catalog so a malformed
+        # spec gets a useful error message instead of a placeholder render.
+        if isinstance(payload, dict):
+            errs.extend(_validate_json_render_payload(payload))
     props = rs.get("props", {})
     if props is not None and not isinstance(props, dict):
         errs.append("renderSpec.props must be an object if provided")
@@ -1097,7 +1650,12 @@ def _template_for(art: dict) -> str:
         name = rs.get("template", "")
         if name in SUPPORTED_TEMPLATES:
             return f"genui/{name}.html"
-    # json-render / openui / unknown all fall through to a placeholder.
+    if kind == "json-render":
+        # Phase C — server-side generative UI. The actual element tree is
+        # pre-rendered to an HTML string in _prepare_json_render_ctx and
+        # injected as `jr.html` into a thin wrapper template.
+        return "genui/json_render.html"
+    # openui / unknown all fall through to a placeholder.
     return "genui/error.html"
 
 
@@ -1115,11 +1673,23 @@ def _render_artifact(request: Request, art: dict) -> Response:
         "supported_templates": sorted(SUPPORTED_TEMPLATES),
     }
 
-    # Per-template context preparation. Add an entry here when a template
-    # needs computed view-model state (e.g. SVG coords for line_chart).
-    # Pattern: each prepare_* returns None on corruption → we fall through
-    # to the error template rather than crashing the request.
-    if rs.get("kind") == "template":
+    # Per-render-kind context preparation. Patterns:
+    #   - kind=json-render → walk the element tree, build HTML string
+    #   - kind=template → look up the right prepare_* helper by template name
+    # Each prepare_* returns None on corruption → fall through to error.html
+    # rather than crash the request.
+    if rs.get("kind") == "json-render":
+        jr_ctx = _prepare_json_render_ctx(payload)
+        if jr_ctx is None:
+            print(
+                f"[genui][render] json-render pre-compute returned None for "
+                f"id={art.get('id')} — falling back to error.html",
+                flush=True,
+            )
+            template_path = "genui/error.html"
+        else:
+            ctx["jr"] = jr_ctx
+    elif rs.get("kind") == "template":
         tpl_name = rs.get("template")
         prepared = None
         if tpl_name == "line_chart":

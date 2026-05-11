@@ -1,0 +1,20 @@
+{% extends "genui/_base.html" %}
+{% block body %}
+
+{# Phase C — json-render kind. The element tree is rendered to an HTML
+   string server-side in _render_json_render_spec (see genui.py). All
+   text is html-escaped at emission time and only http/https/mailto/tel/
+   relative URLs are allowed in href / src props (validated upstream).
+   The wrapper is intentionally thin — design-token CSS already lives in
+   _base.html and the per-component output references those classes
+   (.card, .tag, .kpi, .status-pill, .grid, etc.). #}
+
+{# Element-count footer for debug parity with template artifacts. #}
+{{ jr.html|safe }}
+
+<div class="card" style="margin-top:14px">
+  <div class="muted" style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.5px;text-transform:uppercase">
+    json-render · {{ jr.element_count }} element{{ '' if jr.element_count == 1 else 's' }}
+  </div>
+</div>
+{% endblock %}

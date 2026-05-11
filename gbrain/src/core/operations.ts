@@ -1944,6 +1944,73 @@ const render_response: Operation = {
   cliHints: { name: 'render-response', hidden: true },
 };
 
+// --- Render generative UI (Phase C: json-render generative UI) ---
+//
+// When neither a fixed template (markdown_doc / search_table / etc.) nor a
+// chart fits, the agent can emit a full json-render spec — a tree of typed
+// components (Card, Stack, Grid, Heading, Paragraph, Metric, Link, ...) that
+// the Hermes-side renderer turns into HTML server-side. Wire format is
+// compatible with Vercel's @json-render/react library so a future React
+// renderer can serve the same artifacts unchanged.
+//
+// Catalog of allowed components lives in daniel-hermes/genui.py:
+//   Container, Card, Stack, Grid, Divider, Heading, Paragraph, Code,
+//   Quote, Link, Metric, KeyValueList, Tag, Badge, Image
+//
+// Each component has a prop schema and a render function; unknown component
+// types are rejected at the validator (NOT silently dropped — a typo gets
+// surfaced). URL props (Link.href, Image.src) are protocol-allowlisted to
+// http / https / mailto / tel / relative — javascript: and data: rejected.
+// Hard caps: max 500 elements, max 20 levels of nesting, cycle detection
+// rejects revisits.
+const render_ui: Operation = {
+  name: 'render_ui',
+  description:
+    'Render a bespoke layout from a generative-UI spec when no fixed template (markdown_doc, search_table, line_chart, etc.) captures the right structure. The spec is a tree of typed components (Card, Stack, Grid, Heading, Paragraph, Metric, Link, Tag, Badge, Code, Quote, KeyValueList, Image, Container, Divider). Use this for one-off dashboards mixing metrics + prose, comparison layouts that don\'t fit comparison_table, narrative pages with embedded data callouts. Do NOT use this when a fixed template fits — render_response (markdown_doc) and render_chart (line_chart) are simpler and have stricter validation. Returns `{ui: {url, id}, ...}`.',
+  params: {
+    title: {
+      type: 'string',
+      required: true,
+      description: 'Artifact title shown in the rendered page header.',
+    },
+    spec: {
+      type: 'object',
+      required: true,
+      description: 'A json-render spec: { root: "<element_id>", elements: { "<id>": { type, props, children } } }. Component types: Container, Card, Stack, Grid, Divider, Heading, Paragraph, Code, Quote, Link, Metric, KeyValueList, Tag, Badge, Image. Each has its own props schema — Heading needs {text, level?}; Metric needs {label, value, format?, delta?, deltaKind?}; Link needs {href, text, target?}; etc. Children are referenced by id; container types (Card, Stack, Grid, Container) render their children. Max 500 elements, max 20 nesting levels, no cycles. URL props (href, src) must be http/https/mailto/tel or a relative path starting with /.',
+    },
+  },
+  scope: 'read',
+  handler: async (_ctx, p) => {
+    const spec = p.spec;
+    if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
+      throw new OperationError(
+        'invalid_params',
+        '`spec` must be an object {root: string, elements: object}.',
+      );
+    }
+    const s = spec as Record<string, unknown>;
+    if (typeof s.root !== 'string' || !s.root) {
+      throw new OperationError('invalid_params', '`spec.root` must be a non-empty string id.');
+    }
+    if (!s.elements || typeof s.elements !== 'object' || Array.isArray(s.elements)) {
+      throw new OperationError('invalid_params', '`spec.elements` must be an object keyed by id.');
+    }
+    if (typeof p.title !== 'string' || !p.title.trim()) {
+      throw new OperationError('invalid_params', '`title` must be a non-empty string.');
+    }
+    // Defer detailed spec validation to the portal — keeping the same
+    // single source of truth (`_validate_json_render_payload` in genui.py)
+    // means an LLM that gets the shape wrong gets one consistent error
+    // message from the portal's 400 body, not two parallel validators.
+    return {
+      _genui_render_kind: 'json-render',
+      root: s.root,
+      elements: s.elements,
+    };
+  },
+  cliHints: { name: 'render-ui', hidden: true },
+};
+
 // --- Orphans ---
 
 const find_orphans: Operation = {
@@ -2201,6 +2268,7 @@ export const operations: Operation[] = [
   // GenUI render ops
   render_chart,
   render_response,
+  render_ui,
   // v0.28: Takes + think
   takes_list, takes_search, think,
   // v0.28: whoami + scoped sources management

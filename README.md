@@ -136,7 +136,9 @@ The server hosts a small portal that stores structured **UI artifacts** as JSON 
 - **`comparison_table`** *(Phase A)* — two-column side-by-side. Payload: `{left: {label, sublabel?}, right: {label, sublabel?}, rows: [{label, left, right, highlight?, note?}], summary?, verdict?}` where `highlight = "left" | "right" | "tie"`
 - **`metric_callout`** *(Phase A)* — single hero stat. Payload: `{value: number|string, label?, delta?, delta_kind?: "up"|"down"|"neutral", context?, footnote?, sources?}`
 
-The other two kinds (`json-render`, `openui`) accept-and-store but render to a placeholder for now.
+**`renderSpec.kind = "json-render"`** *(Phase C)* — generative UI. Payload is a tree spec `{root, elements}` where each element has `{type, props, children}`. Component catalog: `Container`, `Card`, `Stack`, `Grid`, `Divider`, `Heading`, `Paragraph`, `Code`, `Quote`, `Link`, `Metric`, `KeyValueList`, `Tag`, `Badge`, `Image`. Rendered server-side via `genui.py:_render_json_render_spec` — no React bundle, no JS. Wire format is compatible with Vercel Labs' [@json-render/core](https://github.com/vercel-labs/json-render) library so a future client-side React renderer is a drop-in upgrade. Hard caps: 500 elements, 20 nesting levels. URL props (`href`, `src`) are protocol-allowlisted to `http`, `https`, `mailto`, `tel`, or relative paths — `javascript:` and `data:` rejected at validate.
+
+The third kind (`openui`) accepts-and-stores but renders to a placeholder for now.
 
 ### Agent-driven visualization (Phase B)
 
@@ -147,6 +149,24 @@ GBrain ships `render_response` — a new MCP op the LLM calls when its own text 
 - "Pros and cons of …" → same.
 
 The op's tool-description tells the agent *when* to call it: more than ~3 short paragraphs, tabular data, multiple citations. Charts still go through `render_chart` (numeric-y enforcement). Single-fact replies stay as plain text.
+
+### Generative UI (Phase C)
+
+When neither a fixed template nor a chart nor a markdown blob captures the right structure, the agent emits a `render_ui` call with a full json-render spec. Example: a "Portfolio summary" combining four KPI metrics, a 2x2 grid of "company highlights" cards, and a footer with sources — none of the existing templates carry all three at once.
+
+```json
+{
+  "root": "page",
+  "elements": {
+    "page": {"type": "Stack", "props": {"gap": 16}, "children": ["kpis", "highlights", "sources"]},
+    "kpis": {"type": "Grid", "props": {"columns": 4}, "children": ["m1","m2","m3","m4"]},
+    "m1": {"type": "Metric", "props": {"label": "AUM", "value": 128000000, "format": "currency"}},
+    ...
+  }
+}
+```
+
+Each `type` is validated against the component catalog at the portal. URL props (`Link.href`, `Image.src`) are protocol-allowlisted. Unknown types or missing required props produce a clear `400` with the offending element id and field name — the LLM can self-correct on retry.
 
 ### Auth
 
