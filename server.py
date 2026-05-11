@@ -159,6 +159,41 @@ def read_env(path: Path) -> dict[str, str]:
 
 GBRAIN_BIN = "/data/.bun/bin/gbrain"
 
+# Cross-prefix env vars that GBrain reads at runtime but which don't carry
+# our GENUI_/GBRAIN_ namespace. Forwarded explicitly when set on Hermes's
+# process env; missing/empty values are silently skipped (so the no-op
+# state is safe — nothing breaks if a key isn't on Railway yet).
+#
+# Sourced from the GBrain-side env-var audit (see ARCHITECTURE.md). Each
+# entry documents *why* GBrain needs it so future contributors can decide
+# whether new forwards are warranted without re-running the audit.
+GBRAIN_EXPLICIT_FORWARD_KEYS = (
+    # Required if GBrain should use the Hermes Railway Postgres. Absent it
+    # falls back to local PGLite. GBrain also accepts GBRAIN_DATABASE_URL,
+    # which the prefix rule above already forwards — but only if a caller
+    # has set the namespaced name. Forwarding DATABASE_URL covers the
+    # common Railway pattern where the service-level var is the canonical
+    # one.
+    "DATABASE_URL",
+    # Used by the GenUI Layer-2 view-picker (GENUI_VIEW_PICKER=true) and
+    # by gbrain's think/dream cycle. Without it the view-picker silently
+    # falls back to rule-based selection.
+    "ANTHROPIC_API_KEY",
+    # Used for embeddings + Whisper transcription. If GBrain is invoked
+    # for search/ingest via Hermes, this must be forwarded.
+    "OPENAI_API_KEY",
+    # Makes gbrain's skills-dir auto-detect deterministic regardless of
+    # the subprocess cwd. Recommended to set to /data/gbrain on Railway
+    # once GBRAIN_SOURCE=local is active.
+    "OPENCLAW_WORKSPACE",
+    # Optional providers — forwarded if set, ignored otherwise. Add only
+    # those you actually configure on Railway; spurious forwards of empty
+    # strings are dropped by the empty-value guard below.
+    "GOOGLE_GENERATIVE_AI_API_KEY",
+    "VOYAGE_API_KEY",
+    "GROQ_API_KEY",
+)
+
 
 def _build_gbrain_mcp_entry() -> dict | None:
     """Construct the GBrain stdio MCP server entry for config.yaml, or
@@ -168,9 +203,16 @@ def _build_gbrain_mcp_entry() -> dict | None:
     LANG, LC_ALL, TERM, SHELL, TMPDIR, XDG_*) — so anything GBrain's GenUI
     middleware needs to call back into this server (the portal base URL,
     the API token, the repo path) must be passed via the entry's `env:`
-    block. We forward GENUI_* and GBRAIN_* from os.environ — those are
-    namespaced, low-risk to forward, and cover what the GBrain side is
-    likely to read. Empty values are dropped.
+    block. Two forwarding sources merged here:
+
+      1. GENUI_* / GBRAIN_* prefix sweep — namespaced, low-risk to forward.
+      2. GBRAIN_EXPLICIT_FORWARD_KEYS allowlist — cross-prefix vars
+         (DATABASE_URL, ANTHROPIC_API_KEY, ...) that GBrain reads but
+         which aren't in our namespace.
+
+    Empty values are dropped from either source. The merge order doesn't
+    matter for correctness (no key appears in both lists) but is
+    deterministic for log-readability.
     """
     if os.environ.get("GBRAIN_ENABLED", "false").lower() != "true":
         return None
@@ -180,6 +222,10 @@ def _build_gbrain_mcp_entry() -> dict | None:
     forwarded_env: dict[str, str] = {}
     for k, v in os.environ.items():
         if (k.startswith("GENUI_") or k.startswith("GBRAIN_")) and v:
+            forwarded_env[k] = v
+    for k in GBRAIN_EXPLICIT_FORWARD_KEYS:
+        v = os.environ.get(k, "")
+        if v:
             forwarded_env[k] = v
 
     return {
