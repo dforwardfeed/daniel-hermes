@@ -1,0 +1,63 @@
+{% extends "genui/_base.html" %}
+{% block body %}
+
+<style>
+.callout { text-align: center; padding: 48px 24px; }
+.callout .value { font-family: 'IBM Plex Mono', monospace; font-size: 64px; font-weight: 600; color: #f0f6fc; line-height: 1; letter-spacing: -1px; }
+.callout .value.has-delta { font-size: 56px; }
+.callout .label { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6b7688; text-transform: uppercase; letter-spacing: 2px; margin-top: 14px; }
+.callout .delta { display: inline-flex; align-items: center; gap: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 14px; margin-top: 12px; padding: 4px 12px; border-radius: 14px; }
+.callout .delta.up    { color: #3fb950; background: rgba(63,185,80,0.10); }
+.callout .delta.down  { color: #f85149; background: rgba(248,81,73,0.10); }
+.callout .delta.neutral { color: #9aa6b8; background: rgba(154,166,184,0.08); }
+.callout .delta-arrow { font-weight: 600; }
+.callout .context { color: #9aa6b8; font-size: 14px; margin-top: 22px; line-height: 1.6; max-width: 540px; margin-left: auto; margin-right: auto; }
+.callout .footnote { color: #6b7688; font-family: 'IBM Plex Mono', monospace; font-size: 11px; margin-top: 18px; }
+</style>
+
+<div class="card callout">
+  {% if metric.label %}
+    <div class="label" style="margin-top:0;margin-bottom:18px">{{ metric.label }}</div>
+  {% endif %}
+
+  <div class="value{% if metric.delta %} has-delta{% endif %}">{{ metric.value }}</div>
+
+  {% if metric.delta %}
+    <div class="delta {{ metric.delta_kind }}">
+      <span class="delta-arrow">
+        {%- if metric.delta_kind == 'up' -%}▲
+        {%- elif metric.delta_kind == 'down' -%}▼
+        {%- else -%}—
+        {%- endif -%}
+      </span>
+      <span>{{ metric.delta }}</span>
+    </div>
+  {% endif %}
+
+  {% if metric.context %}
+    <p class="context">{{ metric.context }}</p>
+  {% endif %}
+
+  {% if metric.footnote %}
+    <div class="footnote">{{ metric.footnote }}</div>
+  {% endif %}
+</div>
+
+{% if metric.sources %}
+<div class="card">
+  <div class="section-h" style="margin-top:0">Sources</div>
+  <ul style="margin-left:18px;font-size:12px">
+    {% for s in metric.sources %}
+      <li>
+        {% if s is mapping %}
+          {% if s.get('url') %}<a href="{{ s.url }}" target="_blank" rel="noopener">{{ s.get('title') or s.url }}</a>{% else %}{{ s.get('title') or s }}{% endif %}
+          {% if s.get('note') %}<span class="muted"> — {{ s.note }}</span>{% endif %}
+        {% else %}
+          {{ s }}
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+{% endblock %}

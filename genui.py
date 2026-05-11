@@ -100,6 +100,12 @@ SUPPORTED_TEMPLATES = {
     "jobs_status",
     "generic_cards",
     "line_chart",
+    # Path A additions — round out the template catalog so the LLM
+    # view-picker has more options than just table / cards / line_chart:
+    "bar_chart",          # vertical bars, same payload shape as line_chart
+    "markdown_doc",       # markdown → HTML; unlocks unstructured-prose UI
+    "comparison_table",   # two-column side-by-side compare
+    "metric_callout",     # single hero stat for "what's my X?" answers
 }
 DAILY_CATEGORIES = {"daily_briefing", "briefing", "stats", "reports"}
 
@@ -244,10 +250,91 @@ def _validate_line_chart_payload(payload: dict) -> list[str]:
     return errs
 
 
+# ── Path A: validators for the new templates ──────────────────────────────────
+# bar_chart shares the line_chart payload contract (series of {name, points})
+# because the data shape is the same — the difference is purely the renderer's
+# choice of bars-vs-lines. Aliased so future divergence stays cheap.
+_validate_bar_chart_payload = _validate_line_chart_payload
+
+
+def _validate_markdown_doc_payload(payload: dict) -> list[str]:
+    """markdown_doc requires a non-empty markdown string. Optional summary,
+    optional list of source citations."""
+    errs: list[str] = []
+    md = payload.get("markdown")
+    if not isinstance(md, str) or not md.strip():
+        errs.append("payload.markdown required (non-empty string)")
+    elif len(md) > 500_000:
+        # Hard cap to avoid blowing up the markdown renderer. ~500KB is well
+        # above any reasonable LLM output and still serves quickly.
+        errs.append(f"payload.markdown too long ({len(md)} chars, max 500000)")
+    sources = payload.get("sources")
+    if sources is not None and not isinstance(sources, list):
+        errs.append("payload.sources must be a list if provided")
+    return errs
+
+
+def _validate_comparison_table_payload(payload: dict) -> list[str]:
+    """comparison_table needs left/right column headers and at least one row.
+    Each row must declare a label plus the left/right values being compared.
+    Optional `highlight` per row marks the winner (`left` | `right` | `tie`)."""
+    errs: list[str] = []
+    for side in ("left", "right"):
+        col = payload.get(side)
+        if not isinstance(col, dict):
+            errs.append(f"payload.{side} must be an object")
+            continue
+        if not col.get("label"):
+            errs.append(f"payload.{side}.label required (string)")
+    rows = payload.get("rows")
+    if not isinstance(rows, list) or not rows:
+        errs.append("payload.rows must be a non-empty array")
+        return errs
+    for i, row in enumerate(rows):
+        if not isinstance(row, dict):
+            errs.append(f"payload.rows[{i}] must be an object")
+            continue
+        if not row.get("label"):
+            errs.append(f"payload.rows[{i}].label required (string)")
+        if "left" not in row:
+            errs.append(f"payload.rows[{i}].left required")
+        if "right" not in row:
+            errs.append(f"payload.rows[{i}].right required")
+        hl = row.get("highlight")
+        if hl is not None and hl not in ("left", "right", "tie"):
+            errs.append(
+                f"payload.rows[{i}].highlight={hl!r} must be one of "
+                f"'left', 'right', 'tie' (or omitted)"
+            )
+    return errs
+
+
+def _validate_metric_callout_payload(payload: dict) -> list[str]:
+    """metric_callout shows one giant number/value with optional context.
+    Required: value. Optional: label, delta, delta_kind, context, sources."""
+    errs: list[str] = []
+    if "value" not in payload:
+        errs.append("payload.value required")
+    delta_kind = payload.get("delta_kind")
+    if delta_kind is not None and delta_kind not in ("up", "down", "neutral"):
+        errs.append(
+            f"payload.delta_kind={delta_kind!r} must be one of "
+            f"'up', 'down', 'neutral' (or omitted)"
+        )
+    sources = payload.get("sources")
+    if sources is not None and not isinstance(sources, list):
+        errs.append("payload.sources must be a list if provided")
+    return errs
+
+
 # Map template name → optional payload validator. Adding a new entry here
 # wires per-template validation without touching _validate_create.
 _TEMPLATE_PAYLOAD_VALIDATORS: dict[str, "Callable[[dict], list[str]]"] = {
-    "line_chart": _validate_line_chart_payload,
+    "line_chart":        _validate_line_chart_payload,
+    "bar_chart":         _validate_bar_chart_payload,
+    "markdown_doc":      _validate_markdown_doc_payload,
+    "comparison_table":  _validate_comparison_table_payload,
+    "metric_callout":    _validate_metric_callout_payload,
 }
 
 
@@ -685,6 +772,323 @@ def _prepare_line_chart_ctx(payload: dict) -> dict | None:
     }
 
 
+# ── bar_chart SVG coordinate pre-compute ──────────────────────────────────────
+# Shares the line_chart payload contract (series → points) but renders as
+# vertical bars grouped by x-label. Pure function; trivial to unit-test.
+
+def _prepare_bar_chart_ctx(payload: dict) -> dict | None:
+    """Pre-compute SVG bar geometry. Multi-series → grouped bars side-by-side
+    per x-label. Single series → one bar per x-label. Y-axis baseline is 0
+    when all values are non-negative; otherwise it crosses at 0 with negative
+    bars drawn downward. Returns None on payload corruption."""
+    series_in = payload.get("series", [])
+    if not isinstance(series_in, list) or not series_in:
+        return None
+
+    cleaned: list[dict] = []
+    all_y: list[float] = []
+    # Preserve x-label order across series (assume first series defines canonical order).
+    x_order: list = []
+    seen_x: set = set()
+    for s in series_in:
+        if not isinstance(s, dict):
+            continue
+        points = s.get("points")
+        if not isinstance(points, list):
+            continue
+        cleaned_pts: list[dict] = []
+        for p in points:
+            if not isinstance(p, dict):
+                continue
+            try:
+                y = float(p.get("y"))
+            except (TypeError, ValueError):
+                continue
+            x_val = p.get("x", "")
+            cleaned_pts.append({"x": x_val, "y": y})
+            all_y.append(y)
+            key = str(x_val)
+            if key not in seen_x:
+                seen_x.add(key)
+                x_order.append(x_val)
+        if cleaned_pts:
+            cleaned.append({"name": s.get("name", ""), "points": cleaned_pts})
+
+    if not cleaned or not all_y:
+        return None
+
+    y_max = max(all_y)
+    y_min = min(all_y)
+    # Anchor baseline at 0 unless data is entirely negative; otherwise we'd
+    # exaggerate small differences by floating the baseline.
+    baseline = 0.0
+    if y_min >= 0:
+        baseline = 0.0
+        y_lo = 0.0
+        y_hi = y_max if y_max > 0 else 1.0
+    elif y_max <= 0:
+        baseline = 0.0
+        y_lo = y_min
+        y_hi = 0.0
+    else:
+        y_lo, y_hi = y_min, y_max
+    y_range = y_hi - y_lo
+    if y_range == 0:
+        y_range = 1.0
+
+    plot_w = _LC_W - _LC_PL - _LC_PR
+    plot_h = _LC_H - _LC_PT - _LC_PB
+
+    fmt = _y_format(payload)
+
+    n_groups = len(x_order)
+    n_series = len(cleaned)
+    # Group width carves the plot horizontally; bars within a group share that slot.
+    group_w = plot_w / n_groups if n_groups else plot_w
+    # Leave 20% group padding so groups don't visually touch each other.
+    bar_slot = group_w * 0.8
+    bar_w = bar_slot / n_series if n_series else bar_slot
+    group_start_offset = (group_w - bar_slot) / 2
+
+    def y_to_pos(v: float) -> float:
+        return _LC_PT + plot_h - ((v - y_lo) / y_range) * plot_h
+
+    baseline_y = y_to_pos(baseline)
+
+    rendered_series = []
+    for s_idx, s in enumerate(cleaned):
+        color = _LINE_CHART_PALETTE[s_idx % len(_LINE_CHART_PALETTE)]
+        # Index points by x for quick lookup against canonical x_order.
+        by_x = {str(p["x"]): p for p in s["points"]}
+        bars = []
+        for g_idx, x_val in enumerate(x_order):
+            p = by_x.get(str(x_val))
+            if p is None:
+                continue
+            y_pos = y_to_pos(p["y"])
+            top = min(y_pos, baseline_y)
+            height = abs(y_pos - baseline_y)
+            x_pos = _LC_PL + g_idx * group_w + group_start_offset + s_idx * bar_w
+            bars.append({
+                "x_pos": round(x_pos, 2),
+                "y_pos": round(top, 2),
+                "width": round(bar_w * 0.92, 2),  # small gap between bars in a group
+                "height": round(max(height, 1.0), 2),
+                "x_label": str(x_val),
+                "y_value": p["y"],
+                "y_label": _format_y(p["y"], fmt),
+            })
+        rendered_series.append({"name": s["name"], "color": color, "bars": bars})
+
+    # X-axis labels: one per group, centered.
+    x_labels = [
+        {
+            "x_pos": _LC_PL + g_idx * group_w + group_w / 2,
+            "x_label": str(x),
+        }
+        for g_idx, x in enumerate(x_order)
+    ]
+
+    # Y-axis: 5 evenly-spaced ticks.
+    y_ticks = []
+    for i in range(5):
+        frac = i / 4
+        val = y_lo + frac * y_range
+        y_pos = _LC_PT + plot_h - frac * plot_h
+        y_ticks.append({"y_pos": round(y_pos, 2), "y_label": _format_y(val, fmt)})
+
+    return {
+        "W": _LC_W,
+        "H": _LC_H,
+        "PL": _LC_PL,
+        "PR": _LC_PR,
+        "PT": _LC_PT,
+        "PB": _LC_PB,
+        "plot_w": plot_w,
+        "plot_h": plot_h,
+        "baseline_y": round(baseline_y, 2),
+        "series": rendered_series,
+        "x_labels": x_labels,
+        "y_ticks": y_ticks,
+        "x_axis_label": _axis_label(payload.get("x_axis")),
+        "y_axis_label": _axis_label(payload.get("y_axis")),
+        "title": payload.get("title", ""),
+        "source_slug": payload.get("source_slug", ""),
+        "multi_series": n_series > 1,
+    }
+
+
+# ── markdown_doc HTML pre-compute ─────────────────────────────────────────────
+# Convert payload.markdown to HTML server-side. Two-stage pipeline:
+#   1. python-markdown renders the markdown source to HTML. It does NOT
+#      sanitize raw HTML inside the source; <script>...</script> would pass
+#      through verbatim.
+#   2. bleach runs the output through a strict tag + attribute allowlist
+#      (defined as _MD_ALLOWED_TAGS / _MD_ALLOWED_ATTRS below). Everything
+#      not in the list — script, iframe, on* handlers, javascript: URLs —
+#      is stripped.
+# Both stages must succeed before we emit HTML; if bleach is missing we
+# return None and fall back to error.html rather than serving unsafe HTML.
+
+# Tags the renderer is allowed to emit. Extending this is a security-
+# sensitive change — only add tags whose props can't carry side effects
+# (no <object>, <embed>, <form>, <input>, etc.).
+_MD_ALLOWED_TAGS = frozenset({
+    # Headings + paragraphs
+    "h1", "h2", "h3", "h4", "h5", "h6", "p", "br", "hr",
+    # Emphasis
+    "strong", "em", "b", "i", "u", "del", "s", "sub", "sup", "mark",
+    # Lists
+    "ul", "ol", "li", "dl", "dt", "dd",
+    # Links + media
+    "a", "img",
+    # Blockquote + code
+    "blockquote", "code", "pre", "kbd", "samp", "var",
+    # Tables (markdown.extensions.tables emits these)
+    "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption",
+    # Containers (markdown TOC + sane_lists wrap in these)
+    "div", "span",
+})
+_MD_ALLOWED_ATTRS = {
+    "a":   ["href", "title", "rel", "target"],
+    "img": ["src", "alt", "title", "width", "height"],
+    "*":   ["id", "class"],  # for TOC anchors + heading IDs
+    "th":  ["align"],
+    "td":  ["align"],
+}
+# URL schemes allowed for <a href> and <img src>. javascript: + data: are
+# excluded by omission. mailto:, tel:, and http(s): cover the realistic LLM
+# output set without enabling code execution vectors.
+_MD_ALLOWED_PROTOCOLS = frozenset({"http", "https", "mailto", "tel"})
+
+
+def _prepare_markdown_doc_ctx(payload: dict) -> dict | None:
+    """Render the supplied markdown to safe HTML. Returns None when either
+    `markdown` or `bleach` is missing (logged with a clear stderr line) —
+    callers fall back to error.html rather than serving unsanitized output."""
+    try:
+        import markdown as _md
+    except ImportError as e:
+        print(f"[genui][markdown_doc] markdown library missing: {e!r}", flush=True)
+        return None
+    try:
+        import bleach as _bleach
+    except ImportError as e:
+        # Critical — bleach is the sanitizer. Refuse to render rather than
+        # emit unsafe HTML if it's somehow missing in the image.
+        print(
+            f"[genui][markdown_doc] bleach library missing: {e!r} — refusing "
+            "to render unsanitized markdown. Add bleach to requirements.txt.",
+            flush=True,
+        )
+        return None
+
+    src = payload.get("markdown") or ""
+    # Extensions we want:
+    #   - tables (LLM often outputs pipe tables)
+    #   - fenced_code (triple-backtick blocks)
+    #   - sane_lists (cleaner ordered/unordered list edges)
+    #   - toc (anchored headings for in-page nav; payload.toc=true to enable)
+    extensions = ["tables", "fenced_code", "sane_lists"]
+    if payload.get("toc") is True:
+        extensions.append("toc")
+
+    try:
+        raw_html = _md.markdown(
+            src,
+            extensions=extensions,
+            output_format="html5",
+        )
+    except Exception as e:
+        print(f"[genui][markdown_doc] markdown render failed: {e!r}", flush=True)
+        return None
+
+    try:
+        html = _bleach.clean(
+            raw_html,
+            tags=_MD_ALLOWED_TAGS,
+            attributes=_MD_ALLOWED_ATTRS,
+            protocols=_MD_ALLOWED_PROTOCOLS,
+            strip=True,            # remove disallowed tags entirely (not just escape)
+            strip_comments=True,   # comments can carry conditional-IE script tricks
+        )
+    except Exception as e:
+        print(f"[genui][markdown_doc] bleach sanitize failed: {e!r}", flush=True)
+        return None
+
+    return {
+        "html": html,
+        "summary": payload.get("summary", ""),
+        "sources": payload.get("sources") or [],
+        "toc_enabled": payload.get("toc") is True,
+    }
+
+
+# ── comparison_table pre-compute ──────────────────────────────────────────────
+
+def _prepare_comparison_table_ctx(payload: dict) -> dict | None:
+    """Light normalization for comparison_table. The validator has already
+    ensured shape; this just maps highlight values to CSS classes the
+    template uses so the Jinja stays declarative."""
+    left = payload.get("left") or {}
+    right = payload.get("right") or {}
+    rows_in = payload.get("rows") or []
+
+    rows = []
+    for r in rows_in:
+        if not isinstance(r, dict):
+            continue
+        hl = r.get("highlight")
+        rows.append({
+            "label": r.get("label", ""),
+            "left": r.get("left", ""),
+            "right": r.get("right", ""),
+            "highlight": hl if hl in ("left", "right", "tie") else None,
+            "note": r.get("note", ""),
+        })
+
+    return {
+        "left_label":    left.get("label", "Left"),
+        "left_sublabel": left.get("sublabel", ""),
+        "right_label":   right.get("label", "Right"),
+        "right_sublabel": right.get("sublabel", ""),
+        "rows":          rows,
+        "summary":       payload.get("summary", ""),
+        "verdict":       payload.get("verdict", ""),
+    }
+
+
+# ── metric_callout pre-compute ────────────────────────────────────────────────
+
+def _prepare_metric_callout_ctx(payload: dict) -> dict | None:
+    """Format a single hero metric. delta_kind controls the up/down/neutral
+    coloring without forcing the caller to know the CSS classes."""
+    value = payload.get("value")
+    if value is None:
+        return None
+
+    # Coerce numeric values to a tidy display string. Strings pass through
+    # untouched so the caller can render "42 of 100" or "≈$1.2B" as-is.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        # Drop trailing zeros on floats; thousand-sep on integers above 999.
+        if isinstance(value, float):
+            display = f"{value:,.2f}".rstrip("0").rstrip(".") or "0"
+        else:
+            display = f"{value:,}"
+    else:
+        display = str(value)
+
+    return {
+        "value":       display,
+        "label":       payload.get("label", ""),
+        "delta":       payload.get("delta", ""),
+        "delta_kind":  payload.get("delta_kind", "neutral"),
+        "context":     payload.get("context", ""),
+        "footnote":    payload.get("footnote", ""),
+        "sources":     payload.get("sources") or [],
+    }
+
+
 # ── UI handlers ───────────────────────────────────────────────────────────────
 def _template_for(art: dict) -> str:
     rs = art.get("renderSpec", {}) or {}
@@ -713,15 +1117,42 @@ def _render_artifact(request: Request, art: dict) -> Response:
 
     # Per-template context preparation. Add an entry here when a template
     # needs computed view-model state (e.g. SVG coords for line_chart).
-    if rs.get("kind") == "template" and rs.get("template") == "line_chart":
-        chart_ctx = _prepare_line_chart_ctx(payload)
-        if chart_ctx is None:
-            # Validator should have caught this, but if a saved artifact
-            # somehow has a corrupt payload, fall back to the error template
-            # rather than 500ing.
-            template_path = "genui/error.html"
+    # Pattern: each prepare_* returns None on corruption → we fall through
+    # to the error template rather than crashing the request.
+    if rs.get("kind") == "template":
+        tpl_name = rs.get("template")
+        prepared = None
+        if tpl_name == "line_chart":
+            prepared = _prepare_line_chart_ctx(payload)
+            ctx_key = "chart"
+        elif tpl_name == "bar_chart":
+            prepared = _prepare_bar_chart_ctx(payload)
+            ctx_key = "chart"
+        elif tpl_name == "markdown_doc":
+            prepared = _prepare_markdown_doc_ctx(payload)
+            ctx_key = "doc"
+        elif tpl_name == "comparison_table":
+            prepared = _prepare_comparison_table_ctx(payload)
+            ctx_key = "compare"
+        elif tpl_name == "metric_callout":
+            prepared = _prepare_metric_callout_ctx(payload)
+            ctx_key = "metric"
         else:
-            ctx["chart"] = chart_ctx
+            ctx_key = None
+
+        if ctx_key is not None:
+            if prepared is None:
+                # Validator should have caught this, but if a saved artifact
+                # somehow has a corrupt payload (or a renderer dep is missing),
+                # fall back to the error template rather than 500ing.
+                print(
+                    f"[genui][render] template={tpl_name} pre-compute returned None "
+                    f"for id={art.get('id')} — falling back to error.html",
+                    flush=True,
+                )
+                template_path = "genui/error.html"
+            else:
+                ctx[ctx_key] = prepared
 
     return _templates.TemplateResponse(request, template_path, ctx)
 

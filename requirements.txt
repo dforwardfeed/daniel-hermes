@@ -11,3 +11,12 @@ websockets>=12.0
 # /data/.hermes/config.yaml in write_config_yaml to register GBrain as an
 # MCP server while preserving user-added keys, so make our dep declarative.
 pyyaml>=6.0
+# markdown → HTML for the GenUI markdown_doc template renderer. Pure-Python,
+# no native deps. Output is run through bleach (below) before reaching the
+# user — python-markdown itself does NOT sanitize raw HTML in the source.
+markdown>=3.5
+# HTML sanitizer applied to markdown_doc output. The LLM emits markdown that
+# may contain raw <script>, <iframe>, onclick=, javascript: URLs, etc. —
+# bleach strips everything not in the explicit allowlist defined in
+# genui.py:_MD_ALLOWED_TAGS. Audited, well-maintained, no native deps.
+bleach>=6.1

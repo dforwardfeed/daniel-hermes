@@ -1,0 +1,60 @@
+{% extends "genui/_base.html" %}
+{% block body %}
+
+{# Prose-friendly styling — applied only inside the doc body so it doesn't
+   leak into other templates. Mirrors the dark theme from _base.html. #}
+<style>
+.md-doc { font-family: 'IBM Plex Sans', sans-serif; color: #c9d1d9; line-height: 1.65; }
+.md-doc h1, .md-doc h2, .md-doc h3, .md-doc h4 { color: #f0f6fc; font-weight: 600; margin: 24px 0 10px; line-height: 1.25; }
+.md-doc h1 { font-size: 22px; border-bottom: 1px solid #252d3d; padding-bottom: 8px; }
+.md-doc h2 { font-size: 18px; }
+.md-doc h3 { font-size: 15px; }
+.md-doc h4 { font-size: 13px; color: #9aa6b8; }
+.md-doc p { margin: 10px 0; font-size: 14px; }
+.md-doc ul, .md-doc ol { margin: 10px 0 10px 24px; font-size: 14px; }
+.md-doc li { margin: 4px 0; }
+.md-doc a { color: #6272ff; }
+.md-doc code { font-family: 'IBM Plex Mono', monospace; font-size: 12px; background: #0a0c11; border: 1px solid #252d3d; border-radius: 3px; padding: 1px 5px; }
+.md-doc pre { background: #0a0c11; border: 1px solid #252d3d; border-radius: 6px; padding: 12px; overflow: auto; margin: 12px 0; }
+.md-doc pre code { background: none; border: none; padding: 0; font-size: 12px; color: #9aa6b8; }
+.md-doc blockquote { border-left: 3px solid #6272ff; margin: 12px 0; padding: 4px 14px; color: #9aa6b8; font-style: italic; background: rgba(98,114,255,0.04); border-radius: 0 6px 6px 0; }
+.md-doc table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 12px 0; }
+.md-doc th, .md-doc td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #252d3d; vertical-align: top; }
+.md-doc th { font-family: 'IBM Plex Mono', monospace; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: #6b7688; font-weight: 500; }
+.md-doc hr { border: none; border-top: 1px solid #252d3d; margin: 24px 0; }
+.md-doc img { max-width: 100%; height: auto; border-radius: 6px; margin: 10px 0; }
+.md-doc .toc { background: #14181f; border: 1px solid #252d3d; border-radius: 8px; padding: 12px 16px; margin: 0 0 16px; }
+.md-doc .toc > ul { margin-left: 14px; }
+</style>
+
+{% if doc.summary %}
+<div class="card">
+  <p style="color:#c9d1d9">{{ doc.summary }}</p>
+</div>
+{% endif %}
+
+<div class="card md-doc">
+  {# `doc.html` is the markdown library's rendered output. Raw HTML in the
+     source markdown is escaped by the renderer's safe defaults; we don't
+     enable md_in_html. If you ever loosen that, audit every caller first. #}
+  {{ doc.html|safe }}
+</div>
+
+{% if doc.sources %}
+<div class="card">
+  <div class="section-h" style="margin-top:0">Sources</div>
+  <ul style="margin-left:18px;font-size:12px">
+    {% for s in doc.sources %}
+      <li>
+        {% if s is mapping %}
+          {% if s.get('url') %}<a href="{{ s.url }}" target="_blank" rel="noopener">{{ s.get('title') or s.url }}</a>{% else %}{{ s.get('title') or s }}{% endif %}
+          {% if s.get('note') %}<span class="muted"> — {{ s.note }}</span>{% endif %}
+        {% else %}
+          {{ s }}
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,49 @@
+{% extends "genui/_base.html" %}
+{% block body %}
+
+<style>
+.cmp-grid { display: grid; grid-template-columns: minmax(140px, 1fr) 1fr 1fr; gap: 0; }
+.cmp-grid > div { padding: 12px 14px; border-bottom: 1px solid #252d3d; font-size: 13px; }
+.cmp-grid > div.header { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6b7688; text-transform: uppercase; letter-spacing: .5px; background: #10141a; border-bottom: 1px solid #252d3d; }
+.cmp-grid > div.row-label { color: #9aa6b8; font-family: 'IBM Plex Mono', monospace; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+.cmp-grid > div.win { background: rgba(63,185,80,0.08); color: #f0f6fc; font-weight: 500; }
+.cmp-grid > div.lose { opacity: 0.6; }
+.cmp-grid > div.tie { color: #d29922; }
+.cmp-grid .sublabel { font-size: 10px; color: #6b7688; margin-top: 2px; }
+.cmp-row-note { grid-column: 1 / span 3; padding: 4px 14px 10px; font-size: 11px; color: #6b7688; font-style: italic; border-bottom: 1px solid #252d3d; }
+</style>
+
+{% if compare.summary %}
+<div class="card">
+  <p style="color:#c9d1d9">{{ compare.summary }}</p>
+</div>
+{% endif %}
+
+<div class="card" style="padding:0;overflow:hidden">
+  <div class="cmp-grid">
+    <div class="header"></div>
+    <div class="header">
+      {{ compare.left_label }}
+      {% if compare.left_sublabel %}<div class="sublabel">{{ compare.left_sublabel }}</div>{% endif %}
+    </div>
+    <div class="header">
+      {{ compare.right_label }}
+      {% if compare.right_sublabel %}<div class="sublabel">{{ compare.right_sublabel }}</div>{% endif %}
+    </div>
+
+    {% for r in compare.rows %}
+      <div class="row-label">{{ r.label }}</div>
+      <div class="{% if r.highlight == 'left' %}win{% elif r.highlight == 'right' %}lose{% elif r.highlight == 'tie' %}tie{% endif %}">{{ r.left }}</div>
+      <div class="{% if r.highlight == 'right' %}win{% elif r.highlight == 'left' %}lose{% elif r.highlight == 'tie' %}tie{% endif %}">{{ r.right }}</div>
+      {% if r.note %}<div class="cmp-row-note">{{ r.note }}</div>{% endif %}
+    {% endfor %}
+  </div>
+</div>
+
+{% if compare.verdict %}
+<div class="card">
+  <div class="section-h" style="margin-top:0">Verdict</div>
+  <p style="color:#c9d1d9">{{ compare.verdict }}</p>
+</div>
+{% endif %}
+{% endblock %}
