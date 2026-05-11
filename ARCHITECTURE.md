@@ -18,11 +18,19 @@ This is a Railway-deployed wrapper around [Hermes Agent](https://github.com/Nous
 │   └─ stdio MCP →  gbrain serve  (subprocess)           │
 │                                                        │
 │  /data/.bun/bin/gbrain    (CLI; bun-linked at boot)    │
-│  /data/gbrain             (cloned fork, master branch) │
+│  /data/gbrain             (cloned fork OR rsync'd      │
+│                            from /app/gbrain at boot)   │
 └────────────────────────────────────────────────────────┘
 ```
 
-`start.sh` runs at PID 1 (under `tini`), invokes `install_gbrain.sh` to clone/update the GBrain fork, then exec's `python /app/server.py`. `server.py`'s `lifespan()` re-writes `/data/.hermes/config.yaml` (preserving user keys, injecting our managed keys) before spawning the dashboard subprocess and auto-starting the gateway.
+`start.sh` runs at PID 1 (under `tini`), invokes `install_gbrain.sh` to populate the GBrain checkout, then exec's `python /app/server.py`. `server.py`'s `lifespan()` re-writes `/data/.hermes/config.yaml` (preserving user keys, injecting our managed keys) before spawning the dashboard subprocess and auto-starting the gateway.
+
+`install_gbrain.sh` has two source modes:
+
+- **`GBRAIN_SOURCE=remote`** (default) — git clone/update from `GBRAIN_REPO_URL` @ `GBRAIN_REF` into `/data/gbrain`. Network-dependent at boot.
+- **`GBRAIN_SOURCE=local`** — rsync the vendored `./gbrain/` tree (a `git subtree` of Dbrain-hermes, baked into the image at `/app/gbrain/`) into `/data/gbrain`. No network at boot; source SHA pinned in `.gbrain-source-ref` → `/app/gbrain/.source-ref` and echoed to the boot log.
+
+Both modes converge on the same `bun install` + `bun link` finalization, so the runtime surface is identical past that point.
 
 ## GenUI artifact portal
 
@@ -79,7 +87,12 @@ mcp_servers:
     connect_timeout: 90
 ```
 
-Hermes filters subprocess env to a safe baseline (`PATH, HOME, USER, LANG, ...`); the `env:` block is the only way `GENUI_*` and `GBRAIN_*` reach the GBrain process. Tools auto-namespace as `mcp_gbrain_<tool>`.
+Hermes filters subprocess env to a safe baseline (`PATH, HOME, USER, LANG, ...`); the `env:` block is the only way external env vars reach the GBrain process. Two forwarding sources are merged in `_build_gbrain_mcp_entry`:
+
+1. **Prefix sweep** — every `GENUI_*` and `GBRAIN_*` key from `os.environ` with a non-empty value.
+2. **Explicit allowlist** (`GBRAIN_EXPLICIT_FORWARD_KEYS`) — cross-prefix vars that GBrain reads but which don't carry our namespace: `DATABASE_URL`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENCLAW_WORKSPACE`, and optional LLM-provider keys (`GOOGLE_GENERATIVE_AI_API_KEY`, `VOYAGE_API_KEY`, `GROQ_API_KEY`). Empty values are dropped, so a key being listed costs nothing until an operator actually sets it on Railway.
+
+Tools auto-namespace as `mcp_gbrain_<tool>`.
 
 This entry is registered when `GBRAIN_ENABLED=true` AND `/data/.bun/bin/gbrain` exists. If either is false, the entry is *removed* on the next `write_config_yaml` call so a stale entry doesn't try to spawn a missing binary. The status is logged: `[hermes-config] mcp_servers.gbrain: registered (env_forwarded=N, timeout=180s)` or `skipped (...)`.
 

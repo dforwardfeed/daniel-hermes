@@ -236,7 +236,12 @@ The `POST` response contains the shareable URL — open it in a browser to see t
 
 ## GBrain (optional)
 
-When `GBRAIN_ENABLED=true`, `start.sh` clones `GBRAIN_REPO_URL` into `GBRAIN_DIR` (default `/data/gbrain`) and runs `bun install` + `bun link` so the `gbrain` CLI is available to Hermes.
+When `GBRAIN_ENABLED=true`, `install_gbrain.sh` populates `GBRAIN_DIR` (default `/data/gbrain`) and runs `bun install` + `bun link` so the `gbrain` CLI is available to Hermes. There are two source modes, controlled by `GBRAIN_SOURCE`:
+
+| Mode | Behavior | Use when |
+|---|---|---|
+| `remote` *(default)* | git clone/update from `GBRAIN_REPO_URL` @ `GBRAIN_REF` | Pulling the latest fork commit at every container boot (legacy behavior, requires network at boot) |
+| `local` | rsync the vendored `./gbrain/` tree from inside the image | Monorepo mode — no network at boot, deterministic content, source SHA pinned in `.gbrain-source-ref` |
 
 The bun-linked binary lives at `/data/.bun/bin/gbrain`. For Hermes — including its terminal tool, gateway subprocesses, and anything spawned from the dashboard — to find it as plain `gbrain`, the directory `/data/.bun/bin` must be on `PATH`. The image handles this in three layers so all child-process and shell-spawn patterns work:
 
@@ -245,6 +250,54 @@ The bun-linked binary lives at `/data/.bun/bin/gbrain`. For Hermes — including
 3. **`/etc/profile.d/bun-path.sh`** — re-applies the path inside *login* shells, since `/etc/profile` on Debian otherwise resets `PATH` from scratch and would hide `gbrain` from any pty-backed terminal Hermes opens.
 
 If you ever see `which gbrain` failing inside Hermes while `/data/.bun/bin/gbrain --version` works, one of those three layers has been bypassed.
+
+### Monorepo layout
+
+The `./gbrain/` directory is a `git subtree` of the [Dbrain-hermes](https://github.com/dforwardfeed/Dbrain-hermes) fork. It ships inside the Docker image as `/app/gbrain/` and is the source for `GBRAIN_SOURCE=local` mode. The vendored fork SHA is pinned in `.gbrain-source-ref` at the repo root, copied to `/app/gbrain/.source-ref` at build time, and echoed to the boot log on every `GBRAIN_SOURCE=local` run.
+
+To re-sync the vendored tree with upstream:
+
+```bash
+git subtree pull --prefix=gbrain https://github.com/dforwardfeed/Dbrain-hermes.git master --squash
+# then update .gbrain-source-ref to the new fork HEAD SHA
+git -C C:/coding-projects/Dbrain-hermes rev-parse HEAD > .gbrain-source-ref
+git add .gbrain-source-ref && git commit -m "Pin gbrain source ref"
+```
+
+### Migrating Railway from remote → local mode
+
+Cutover is reversible. The default stays `remote` so you can flip back at any time by setting `GBRAIN_SOURCE=remote` and redeploying.
+
+1. **Deploy the monorepo image** — push the changes that introduce `./gbrain/`, the `COPY gbrain/` Dockerfile step, and `rsync` in apt. With `GBRAIN_SOURCE` unset (or `=remote`), runtime behavior is identical to before.
+2. **Create a Railway preview environment** — fork from production so it inherits all env vars, then change just `GBRAIN_SOURCE=local` on the preview. Trigger a redeploy.
+3. **Run the verification checklist** (below) against the preview URL.
+4. **Add any cross-prefix env vars** that GBrain needs but aren't in your service env yet. The forward allowlist in `server.py:GBRAIN_EXPLICIT_FORWARD_KEYS` covers `DATABASE_URL`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENCLAW_WORKSPACE`, and a few optional LLM-provider keys — but the *values* must be set on Railway for them to do anything. The forward is a no-op when a key is unset.
+5. **Flip prod** — once the preview is green, set `GBRAIN_SOURCE=local` on the production environment.
+6. **Keep `GBRAIN_REPO_URL` / `GBRAIN_REF` set** for at least one week after cutover. Rollback is just `GBRAIN_SOURCE=remote` + redeploy.
+7. **After a clean week**, archive the `Dbrain-hermes` repo on GitHub so stale CI never runs against a dormant tree.
+
+### Verification checklist (run against the preview URL first)
+
+- [ ] Railway build succeeds (first build after the apt-get rsync addition is slower — the layer cache is busted, hermes-agent + ui-tui rebuild)
+- [ ] `GET /health` returns `{"status":"ok",...}`
+- [ ] `GET /setup` loads the admin dashboard
+- [ ] Boot logs show `[install_gbrain] Source: local` and `Source ref: 48b0db1c…`
+- [ ] Boot logs show `[hermes-config] mcp_servers.gbrain: registered (env_forwarded=N, timeout=180s)`
+- [ ] Hermes dashboard Chat tab opens (PTY connects via `/api/pty`)
+- [ ] `mcp_gbrain_*` tools respond to a chat message
+- [ ] `POST /api/ui/artifacts` from a `render_chart` MCP call returns a `/ui/latest/<id>` URL that renders the line_chart SVG
+
+### Env vars (GBrain-side)
+
+| Variable | Default | Mode | Description |
+|---|---|---|---|
+| `GBRAIN_ENABLED` | `false` | both | Master switch — set to `true` to enable the GBrain MCP server |
+| `GBRAIN_SOURCE` | `remote` | both | `remote` (git clone) or `local` (rsync vendored `/app/gbrain/`) |
+| `GBRAIN_REPO_URL` | `https://github.com/dforwardfeed/Dbrain-hermes.git` | remote | Git URL to clone |
+| `GBRAIN_REF` | `main` | remote | Ref to check out. **Note**: the fork's primary branch is `master`, not `main` — set this in Railway explicitly |
+| `GBRAIN_DIR` | `/data/gbrain` | both | Where the runtime checkout lives (must be on the persistent volume) |
+| `GBRAIN_LOCAL_SOURCE_DIR` | `/app/gbrain` | local | Where the in-image vendored tree lives |
+| `GBRAIN_REQUIRED` | `false` | both | If `true`, install failures abort container boot |
 
 ## Credits
 
