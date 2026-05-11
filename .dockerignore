@@ -1,0 +1,40 @@
+# Keep the Docker build context lean. The image already pulls hermes-agent
+# at build time and only COPYs a handful of files from this repo; everything
+# below is either developer-local clutter or build artifacts we never want
+# uploaded to Railway as part of the context.
+
+# Python local artifacts (re-generated in the image)
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# OS / editor cruft
+.DS_Store
+*.log
+.env
+
+# Vendored gbrain/ (subtree from Dbrain-hermes). Only consumed when
+# GBRAIN_SOURCE=local is set; the Dockerfile-side COPY is added in a
+# later step. These build artifacts are gitignored in the subtree but
+# can exist locally after `bun install` / `bun run build` — keep them
+# out of the build context unconditionally.
+gbrain/node_modules/
+gbrain/admin/node_modules/
+gbrain/.git/
+gbrain/.context/
+gbrain/test/.cache/
+# NOTE: gbrain/admin/dist/ is intentionally NOT excluded — it's the pre-built
+# React SPA bundle that the fork commits and that `bun --compile` embeds at
+# runtime. Excluding it would break GBRAIN_SOURCE=local mode silently.
+
+# Reference / scratch dirs already in .gitignore — belt-and-suspenders so a
+# stale local checkout never bloats the build context.
+ref_only/
+ref_ui_only/
+ref_ui_only_2/
+dashboard-ref-only/
+openai_anth_ref_only/
+hermes-git/
+skills/
+.claude/
