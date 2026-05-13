@@ -74,6 +74,44 @@ def log(msg: str) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Activity log — see activity.py in the same container. We don't import that
+# module from here because this subprocess runs in its own process; we just
+# match its on-disk format.
+# ──────────────────────────────────────────────────────────────────────────────
+
+from datetime import datetime, timezone  # noqa: E402
+import json as _json  # noqa: E402
+
+_ACTIVITY_DIR = os.environ.get("HERMES_HOME", "/data/.hermes") + "/activity"
+
+
+def _activity_write(name: str, outcome: str, *, latency_ms: int | None = None,
+                    summary: str | None = None, error: str | None = None) -> None:
+    try:
+        os.makedirs(_ACTIVITY_DIR, exist_ok=True)
+        now = datetime.now(timezone.utc)
+        year, week, _ = now.isocalendar()
+        path = f"{_ACTIVITY_DIR}/activity-{year}-W{week:02d}.jsonl"
+        rec: dict = {
+            "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "kind": "tool_call",
+            "source": "mcp_genui",
+            "name": name,
+            "outcome": outcome,
+        }
+        if latency_ms is not None:
+            rec["latency_ms"] = latency_ms
+        if summary:
+            rec["summary"] = summary[:200]
+        if error:
+            rec["error"] = error[:200]
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(rec, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # HTTP client — single shared httpx.Client across process lifetime.
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -527,12 +565,17 @@ def handle_tools_list(req_id: Any, _params: dict) -> None:
 
 
 def handle_tools_call(req_id: Any, params: dict) -> None:
+    import time as _time
     name = params.get("name", "")
+    log_name = name[len("genui_"):] if name.startswith("genui_") else name
     arguments = params.get("arguments") or {}
+    t0 = _time.time()
     try:
         result = call_tool(name, arguments)
         text = json.dumps(result, ensure_ascii=False, indent=2)
         reply_result(req_id, {"content": [{"type": "text", "text": text}]})
+        _activity_write(log_name, "ok",
+                        latency_ms=int((_time.time() - t0) * 1000))
     except ValueError as e:
         reply_result(
             req_id,
@@ -541,6 +584,9 @@ def handle_tools_call(req_id: Any, params: dict) -> None:
                 "isError": True,
             },
         )
+        _activity_write(log_name, "error",
+                        latency_ms=int((_time.time() - t0) * 1000),
+                        error=str(e))
     except httpx.HTTPStatusError as e:
         body = ""
         try:
@@ -553,6 +599,9 @@ def handle_tools_call(req_id: Any, params: dict) -> None:
             req_id,
             {"content": [{"type": "text", "text": msg}], "isError": True},
         )
+        _activity_write(log_name, "error",
+                        latency_ms=int((_time.time() - t0) * 1000),
+                        error=f"HTTP {e.response.status_code}")
     except httpx.HTTPError as e:
         msg = f"GenUI API request failed: {e}"
         log(msg)
@@ -560,6 +609,9 @@ def handle_tools_call(req_id: Any, params: dict) -> None:
             req_id,
             {"content": [{"type": "text", "text": msg}], "isError": True},
         )
+        _activity_write(log_name, "error",
+                        latency_ms=int((_time.time() - t0) * 1000),
+                        error=str(e)[:100])
     except Exception as e:  # pragma: no cover — defensive
         msg = f"Unexpected error in {name}: {e}"
         log(msg)
@@ -567,6 +619,9 @@ def handle_tools_call(req_id: Any, params: dict) -> None:
             req_id,
             {"content": [{"type": "text", "text": msg}], "isError": True},
         )
+        _activity_write(log_name, "error",
+                        latency_ms=int((_time.time() - t0) * 1000),
+                        error=str(e)[:100])
 
 
 HANDLERS = {

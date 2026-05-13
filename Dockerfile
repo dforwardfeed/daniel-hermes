@@ -71,6 +71,7 @@ RUN mkdir -p /data/.hermes
 
 COPY server.py /app/server.py
 COPY genui.py /app/genui.py
+COPY activity.py /app/activity.py
 COPY constellation_mcp.py /app/constellation_mcp.py
 COPY genui_mcp.py /app/genui_mcp.py
 COPY templates/ /app/templates/

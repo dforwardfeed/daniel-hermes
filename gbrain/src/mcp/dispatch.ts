@@ -6,6 +6,8 @@
  * + missing-context bugs; this module exists to prevent that recurring.
  */
 
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { join as joinPath } from 'node:path';
 import type { BrainEngine } from '../core/engine.ts';
 import { operations, OperationError } from '../core/operations.ts';
 import type { Operation, OperationContext } from '../core/operations.ts';
@@ -168,6 +170,42 @@ export function buildOperationContext(
 }
 
 /**
+ * Activity log: appends one JSONL event per tool dispatch to the Hermes-side
+ * unified activity log so the /ui/activity dashboard can show gbrain tool
+ * calls alongside constellation/genui ones. Best-effort — any IO failure is
+ * swallowed; the calling subsystem must never break because of telemetry.
+ *
+ * The path + schema match what `activity.py` in the daniel-hermes wrapper
+ * reads. Both writers append to the same file; concurrent appendFileSync of
+ * sub-PIPE_BUF lines is atomic on Linux, so no locking is needed.
+ *
+ * HERMES_HOME defaults to /data/.hermes which matches the wrapper's default.
+ * If the env var is absent (e.g. local-dev outside the container), the write
+ * silently no-ops via the try/catch.
+ */
+function writeActivityEntry(rec: Record<string, unknown>): void {
+  try {
+    const home = process.env.HERMES_HOME || '/data/.hermes';
+    const dir = joinPath(home, 'activity');
+    mkdirSync(dir, { recursive: true });
+    // ISO week stamp — same scheme as the friction log so operators only
+    // need to learn one naming convention.
+    const d = new Date();
+    // Crude ISO-week calc: find Thursday of the same week, then week-of-year.
+    const tmp = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    const dayNum = tmp.getUTCDay() || 7;
+    tmp.setUTCDate(tmp.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
+    const week = Math.ceil((((tmp.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+    const ww = String(week).padStart(2, '0');
+    const path = joinPath(dir, `activity-${tmp.getUTCFullYear()}-W${ww}.jsonl`);
+    appendFileSync(path, JSON.stringify(rec) + '\n', { encoding: 'utf8' });
+  } catch {
+    // Swallow — telemetry never breaks the dispatch.
+  }
+}
+
+/**
  * Resolve operation, validate params, build context, invoke handler, format result.
  *
  * Returns a `ToolResult` with the same shape both MCP transports need:
@@ -179,14 +217,27 @@ export async function dispatchToolCall(
   params: Record<string, unknown> | undefined,
   opts: DispatchOpts = {},
 ): Promise<ToolResult> {
+  const t0 = Date.now();
   const op = operations.find(o => o.name === name);
   if (!op) {
+    writeActivityEntry({
+      ts: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
+      kind: 'tool_call', source: 'mcp_gbrain', name,
+      outcome: 'error', error: 'unknown_tool',
+      latency_ms: Date.now() - t0,
+    });
     return { content: [{ type: 'text', text: `Error: Unknown tool: ${name}` }], isError: true };
   }
 
   const safeParams = params || {};
   const validationError = validateParams(op, safeParams);
   if (validationError) {
+    writeActivityEntry({
+      ts: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
+      kind: 'tool_call', source: 'mcp_gbrain', name,
+      outcome: 'error', error: 'invalid_params',
+      latency_ms: Date.now() - t0,
+    });
     return {
       content: [{ type: 'text', text: JSON.stringify({ error: 'invalid_params', message: validationError }, null, 2) }],
       isError: true,
@@ -216,8 +267,21 @@ export async function dispatchToolCall(
     }
 
     const payload = ui ? { result, ui } : result;
+    writeActivityEntry({
+      ts: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
+      kind: 'tool_call', source: 'mcp_gbrain', name,
+      outcome: 'ok',
+      latency_ms: Date.now() - t0,
+    });
     return { content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] };
   } catch (e: unknown) {
+    const err = e instanceof OperationError ? e.code : (e instanceof Error ? e.message : String(e));
+    writeActivityEntry({
+      ts: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
+      kind: 'tool_call', source: 'mcp_gbrain', name,
+      outcome: 'error', error: String(err).slice(0, 200),
+      latency_ms: Date.now() - t0,
+    });
     if (e instanceof OperationError) {
       return { content: [{ type: 'text', text: JSON.stringify(e.toJSON(), null, 2) }], isError: true };
     }

@@ -1268,6 +1268,137 @@
     pointer-events: auto;
   }
 
+  /* ─── Activity dashboard ─────────────────────────────────────────── */
+  .activity-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--space-4);
+  }
+  @media (min-width: 1000px) {
+    .activity-grid { grid-template-columns: 1fr 1fr; }
+    .activity-grid > .activity-panel--did { grid-column: 1 / -1; }
+  }
+  .activity-panel {
+    background: var(--bg-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+  .activity-panel__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+  .activity-panel__title {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: var(--fw-medium);
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+  }
+  .activity-panel__count {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+
+  /* Single-row job + skill + event line. */
+  .activity-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-1);
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: var(--fs-sm);
+    min-width: 0;
+  }
+  .activity-row:last-child { border-bottom: none; }
+  .activity-row__dot {
+    flex: 0 0 auto;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--text-tertiary);
+  }
+  .activity-row__dot--ok      { background: var(--success); }
+  .activity-row__dot--err     { background: var(--danger); }
+  .activity-row__dot--active  {
+    background: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-subtle);
+    animation: activity-pulse 1.6s var(--ease) infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .activity-row__dot--active { animation: none; }
+  }
+  @keyframes activity-pulse {
+    0%, 100% { box-shadow: 0 0 0 3px var(--accent-subtle); }
+    50%      { box-shadow: 0 0 0 6px rgba(124, 137, 255, 0.18); }
+  }
+  .activity-row__name {
+    flex: 1 1 auto;
+    min-width: 0;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .activity-row__sub {
+    flex: 1 1 auto;
+    min-width: 0;
+    color: var(--text-secondary);
+    font-size: var(--fs-xs);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .activity-row__meta {
+    flex: 0 0 auto;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-tertiary);
+    text-align: right;
+  }
+
+  /* Skill row: name + bar + count. The bar visualizes usage as a
+     proportion of the panel's peak so a quiet brain still shows a
+     readable distribution. */
+  .skill-row { display: flex; align-items: center; gap: var(--space-3); }
+  .skill-row__name {
+    flex: 0 0 36%;
+    min-width: 0;
+    color: var(--text-primary);
+    font-size: var(--fs-sm);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .skill-row__bar {
+    flex: 1 1 auto;
+    height: 6px;
+    background: var(--bg-sunken);
+    border-radius: var(--radius-full);
+    overflow: hidden;
+  }
+  .skill-row__fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: var(--radius-full);
+  }
+  .skill-row__fill--empty { background: var(--border-subtle); }
+  .skill-row__count {
+    flex: 0 0 auto;
+    width: 56px;
+    text-align: right;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+  }
+
   /* ─── Segmented control (tabs) ────────────────────────────────────── */
   .seg {
     display: inline-flex;

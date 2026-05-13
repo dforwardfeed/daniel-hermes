@@ -37,6 +37,8 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 from starlette.templating import Jinja2Templates
 
+import activity as _activity  # noqa: E402  — local module, side-effect-free
+
 
 # Wired up in get_routes(); module-level so handlers can reach them.
 _templates: Jinja2Templates | None = None
@@ -485,6 +487,205 @@ def _topbar_views() -> list[dict]:
     nav reflects the current set of custom views without polling JS."""
     return [{"slug": v.get("slug", ""), "name": v.get("name", "")}
             for v in _list_views()[:VIEW_NAV_MAX]]
+
+
+# ── Activity page data ───────────────────────────────────────────────────────
+# These helpers feed the /ui/activity dashboard. They're best-effort: any
+# unavailable subsystem (gbrain CLI missing, skills directory absent, JSONL
+# log empty) degrades to an empty list rather than failing the page.
+
+import subprocess as _subprocess
+import time as _time
+
+_GBRAIN_BIN = "/data/.bun/bin/gbrain"
+_SKILLS_DIRS = [
+    Path("/data/gbrain/skills"),   # runtime checkout from install_gbrain.sh
+    Path("/app/gbrain/skills"),    # vendored fallback for GBRAIN_SOURCE=local
+]
+_JOBS_CACHE: dict = {"ts": 0.0, "data": []}
+_JOBS_CACHE_TTL = 5.0  # seconds
+_SKILLS_CACHE: dict = {"ts": 0.0, "data": []}
+_SKILLS_CACHE_TTL = 60.0  # seconds
+
+
+def _read_jobs() -> list[dict]:
+    """Shell out to `gbrain jobs list --json` for active + recent jobs.
+    Cached for a few seconds so a page refresh doesn't fork a new process
+    every time. Returns [] if gbrain isn't installed or the call fails —
+    the page renders an "(gbrain unavailable)" placeholder."""
+    now = _time.time()
+    if now - _JOBS_CACHE["ts"] < _JOBS_CACHE_TTL:
+        return _JOBS_CACHE["data"]
+    out: list[dict] = []
+    if Path(_GBRAIN_BIN).exists():
+        try:
+            res = _subprocess.run(
+                [_GBRAIN_BIN, "jobs", "list", "--json", "--limit", "30"],
+                capture_output=True, text=True, timeout=8,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                data = json.loads(res.stdout)
+                if isinstance(data, list):
+                    out = data
+                elif isinstance(data, dict) and isinstance(data.get("jobs"), list):
+                    out = data["jobs"]
+        except (OSError, _subprocess.TimeoutExpired, json.JSONDecodeError):
+            out = []
+    _JOBS_CACHE.update({"ts": now, "data": out})
+    return out
+
+
+def _read_skills() -> list[dict]:
+    """Scan gbrain's skills directory; parse SKILL.md frontmatter for
+    name + description + tools. Cached for 60s — the file set rarely
+    changes between page loads."""
+    now = _time.time()
+    if now - _SKILLS_CACHE["ts"] < _SKILLS_CACHE_TTL:
+        return _SKILLS_CACHE["data"]
+    skills_dir = None
+    for candidate in _SKILLS_DIRS:
+        if candidate.is_dir():
+            skills_dir = candidate
+            break
+    out: list[dict] = []
+    if skills_dir is not None:
+        for sub in sorted(skills_dir.iterdir()):
+            if not sub.is_dir():
+                continue
+            md = sub / "SKILL.md"
+            if not md.exists():
+                continue
+            try:
+                content = md.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            fm = _parse_simple_frontmatter(content)
+            if not fm:
+                continue
+            out.append({
+                "slug": sub.name,
+                "name": fm.get("name", sub.name),
+                "description": fm.get("description", ""),
+                "tools": fm.get("tools", []),
+            })
+    _SKILLS_CACHE.update({"ts": now, "data": out})
+    return out
+
+
+def _parse_simple_frontmatter(content: str) -> dict | None:
+    """Minimal frontmatter extractor — name, description, triggers, tools.
+    Doesn't need yaml; the formats we care about are flat scalars and
+    simple `- item` lists. Returns None if no frontmatter block."""
+    m = re.match(r"^---\n([\s\S]*?)\n---", content)
+    if not m:
+        return None
+    body = m.group(1)
+    out: dict = {"tools": [], "triggers": []}
+    current_list: str | None = None
+    for line in body.split("\n"):
+        if not line.strip():
+            current_list = None
+            continue
+        if line.startswith("  - ") and current_list:
+            val = line[4:].strip().strip('"').strip("'")
+            if val:
+                out[current_list].append(val)
+            continue
+        # Reset list-mode on any non-indented line.
+        current_list = None
+        if ":" in line:
+            key, _, val = line.partition(":")
+            key = key.strip()
+            val = val.strip()
+            if key in ("name", "description"):
+                out[key] = val.strip('"').strip("'")
+            elif key in ("tools", "triggers"):
+                if val:
+                    # Inline list: `tools: [search, query]` — handle the
+                    # common variants without dragging yaml in.
+                    if val.startswith("[") and val.endswith("]"):
+                        inner = val[1:-1]
+                        parts = [p.strip().strip('"').strip("'")
+                                 for p in inner.split(",") if p.strip()]
+                        out[key] = parts
+                else:
+                    current_list = key
+    return out
+
+
+def _activity_dashboard_ctx() -> dict:
+    """Build the {now, can, did} context for the /ui/activity page.
+
+    NOW:
+      open_jobs  — queued + active + running jobs
+      recent_jobs — most recent 5 terminal jobs (completed/failed/cancelled)
+    CAN:
+      skills — every skill with its description + 7-day usage count
+               (sourced from activity.tool_usage_counts mapped via the
+               skill's declared `tools:` frontmatter)
+      tools  — top-N most-used tools across all MCPs, 7-day window
+    DID:
+      feed   — last 30 activity events newest-first
+    """
+    jobs = _read_jobs()
+    active_statuses = {"queued", "waiting", "active", "running"}
+    open_jobs: list[dict] = []
+    recent_jobs: list[dict] = []
+    for j in jobs:
+        if not isinstance(j, dict):
+            continue
+        status = (j.get("status") or "").lower()
+        if status in active_statuses:
+            open_jobs.append(j)
+        else:
+            recent_jobs.append(j)
+    recent_jobs = recent_jobs[:5]
+
+    skills = _read_skills()
+    usage = _activity.tool_usage_counts(days=7)
+    last_used = _activity.last_used_map(weeks_back=4)
+
+    # Score each skill by summing the 7d call counts of its declared tools.
+    # Most existing skills declare tools as e.g. ["search", "list_pages"];
+    # those map to "mcp_gbrain.search" / "mcp_gbrain.list_pages" in the
+    # usage dict. Skills that don't declare tools get a usage of 0 but
+    # still appear in the list.
+    for sk in skills:
+        score = 0
+        last = ""
+        for tool in sk.get("tools") or []:
+            for source in ("mcp_gbrain", "mcp_genui", "mcp_constellation"):
+                key = f"{source}.{tool}"
+                score += usage.get(key, 0)
+                lu = last_used.get(key, "")
+                if lu > last:
+                    last = lu
+        sk["_usage7d"] = score
+        sk["_last_used"] = last
+    # Sort by usage desc, then name. Stable: skills with no usage cluster
+    # alphabetically at the bottom.
+    skills.sort(key=lambda s: (-s["_usage7d"], s.get("name", "")))
+
+    # Top tools across all MCPs in the 7d window.
+    top_tools = sorted(
+        ({"name": k, "count": v} for k, v in usage.items()),
+        key=lambda t: -t["count"],
+    )[:15]
+
+    feed = _activity.read_recent(limit=30)
+
+    return {
+        "open_jobs": open_jobs,
+        "recent_jobs": recent_jobs,
+        "skills": skills,
+        "top_tools": top_tools,
+        "feed": feed,
+        "stats": {
+            "active_count": len(open_jobs),
+            "skill_count": len(skills),
+            "tools_used_7d": len(usage),
+        },
+    }
 
 
 def _list_artifacts(
@@ -1394,6 +1595,11 @@ async def api_create(request: Request) -> Response:
         flush=True,
     )
 
+    _activity.append(
+        kind="artifact", source="genui", name="create",
+        summary=f"{art['renderSpec'].get('template') or art['renderSpec'].get('kind')} · {art.get('category', '')}",
+        outcome="ok",
+    )
     base = _base_url(request)
     return JSONResponse(
         {
@@ -1538,6 +1744,11 @@ async def api_views_create(request: Request) -> Response:
         f"items={len(view['items'])} auth={auth_via}",
         flush=True,
     )
+    _activity.append(
+        kind="view_mutation", source="genui", name="view_create",
+        summary=f"{view['slug']} · {view['name']}",
+        outcome="ok",
+    )
 
     base = _base_url(request)
     return JSONResponse(
@@ -1620,6 +1831,10 @@ async def api_views_delete(request: Request) -> Response:
     except OSError:
         return JSONResponse({"error": "delete failed"}, status_code=500)
     print(f"[genui] view deleted slug={request.path_params['slug']}", flush=True)
+    _activity.append(
+        kind="view_mutation", source="genui", name="view_delete",
+        summary=request.path_params["slug"], outcome="ok",
+    )
     return JSONResponse({"ok": True})
 
 
@@ -1655,6 +1870,11 @@ async def api_view_item_create(request: Request) -> Response:
         _save_view(view)
     except OSError:
         return JSONResponse({"error": "failed to persist view"}, status_code=500)
+    _activity.append(
+        kind="view_mutation", source="genui", name="item_add",
+        summary=f"{view['slug']}: {item['text'][:80]}",
+        outcome="ok",
+    )
     return JSONResponse({"ok": True, "item": item}, status_code=201)
 
 
@@ -1733,6 +1953,14 @@ async def api_view_item_update(request: Request) -> Response:
         _save_view(view)
     except OSError:
         return JSONResponse({"error": "failed to persist view"}, status_code=500)
+    # Distinguish done-toggle from text/note edits in the feed — done is
+    # the dominant signal, edits are quieter.
+    mutation_kind = "item_done" if "done" in body else "item_edit"
+    _activity.append(
+        kind="view_mutation", source="genui", name=mutation_kind,
+        summary=f"{view['slug']}: {current.get('text', '')[:80]}",
+        outcome="ok",
+    )
     return JSONResponse({"ok": True, "item": current})
 
 
@@ -1817,6 +2045,10 @@ async def api_view_item_delete(request: Request) -> Response:
         _save_view(view)
     except OSError:
         return JSONResponse({"error": "failed to persist view"}, status_code=500)
+    _activity.append(
+        kind="view_mutation", source="genui", name="item_remove",
+        summary=f"{view['slug']}: {item_id}", outcome="ok",
+    )
     return JSONResponse({"ok": True})
 
 
@@ -2482,6 +2714,20 @@ async def page_daily(request: Request) -> Response:
     )
 
 
+async def page_activity(request: Request) -> Response:
+    """The Activity dashboard. Three panels: NOW (jobs), CAN (skills +
+    tools), DID (recent activity feed). Read-only — operators don't
+    mutate here; they just look."""
+    if not GENUI_ENABLED:
+        return HTMLResponse("GenUI disabled", status_code=503)
+    if err := _ui_guard(request):
+        return err
+    ctx = _activity_dashboard_ctx()
+    ctx["topbar_views"] = _topbar_views()
+    assert _templates is not None
+    return _templates.TemplateResponse(request, "genui/activity.html", ctx)
+
+
 async def page_views_index(request: Request) -> Response:
     """List all user-defined views. Sibling of /ui/saved."""
     if not GENUI_ENABLED:
@@ -2645,4 +2891,6 @@ def get_routes(
         # User-defined views — index + per-view permalinks.
         Route("/ui/views", page_views_index, methods=["GET"]),
         Route("/ui/view/{slug}", page_view, methods=["GET"]),
+        # Activity dashboard — NOW / CAN / DID.
+        Route("/ui/activity", page_activity, methods=["GET"]),
     ]

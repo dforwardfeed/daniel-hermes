@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Activity — Hermes</title>
+<meta http-equiv="refresh" content="20">
+{% include "genui/_design.html" %}
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar__inner container">
+    <div class="topbar__lead">
+      <div class="topbar__eyebrow">
+        <span class="badge badge--accent">activity</span>
+        <span class="dim mono">
+          {{ stats.active_count }} active · {{ stats.skill_count }} skills ·
+          {{ stats.tools_used_7d }} tools used (7d)
+        </span>
+      </div>
+      <h1 class="topbar__title">Activity</h1>
+    </div>
+    <div class="topbar__meta">
+      <a class="btn btn--sm" href="/ui/saved">Library</a>
+      <a class="btn btn--sm" href="/ui/daily">Daily</a>
+      <a class="btn btn--sm" href="/ui/views">Views</a>
+      {% for v in (topbar_views or []) %}
+        <a class="btn btn--sm" href="/ui/view/{{ v.slug }}" title="View: {{ v.name }}">{{ v.name }}</a>
+      {% endfor %}
+      <a class="btn btn--sm" href="/setup">← Setup</a>
+    </div>
+  </div>
+</header>
+
+<main class="app-shell">
+  <div class="container">
+    <div class="activity-grid">
+
+      {# ───────── NOW ───────── #}
+      <section class="activity-panel">
+        <div class="activity-panel__head">
+          <div class="activity-panel__title">Now</div>
+          <div class="activity-panel__count">{{ open_jobs|length }} active</div>
+        </div>
+        {% if open_jobs %}
+          <div>
+            {% for j in open_jobs %}
+              <div class="activity-row">
+                <span class="activity-row__dot activity-row__dot--active"
+                      title="{{ j.status }}"></span>
+                <span class="activity-row__name strong">{{ j.name or j.id or 'job' }}</span>
+                <span class="activity-row__sub muted">{{ j.queue or '' }}</span>
+                <span class="activity-row__meta">
+                  {{ (j.started_at or j.created_at or '')[:19] }}
+                </span>
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="empty" style="padding:var(--space-4)">No active jobs.</div>
+        {% endif %}
+
+        {% if recent_jobs %}
+          <div class="section-h" style="margin-top:var(--space-2)">Recent</div>
+          <div>
+            {% for j in recent_jobs %}
+              {% set ok = (j.status or '')|lower in ('completed', 'success', 'done', 'ok') %}
+              <div class="activity-row">
+                <span class="activity-row__dot {{ 'activity-row__dot--ok' if ok else 'activity-row__dot--err' }}"
+                      title="{{ j.status }}"></span>
+                <span class="activity-row__name">{{ j.name or j.id or 'job' }}</span>
+                <span class="activity-row__sub muted">{{ j.status or '' }}</span>
+                <span class="activity-row__meta">
+                  {{ (j.finished_at or j.completed_at or j.created_at or '')[:19] }}
+                </span>
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </section>
+
+      {# ───────── CAN ───────── #}
+      <section class="activity-panel">
+        <div class="activity-panel__head">
+          <div class="activity-panel__title">Can — skills</div>
+          <div class="activity-panel__count">
+            {{ skills|length }} total · sorted by use (7d)
+          </div>
+        </div>
+
+        {% if skills %}
+          {# Compute the panel peak so the bars are proportionally readable
+             even on a quiet brain. Floor to 1 so empty data doesn't divide
+             by zero. #}
+          {% set peak = [1, (skills | map(attribute='_usage7d') | max)] | max %}
+          <div>
+            {% for s in skills[:12] %}
+              <div class="activity-row">
+                <div class="skill-row" style="flex:1 1 auto;min-width:0">
+                  <span class="skill-row__name" title="{{ s.description }}">{{ s.name }}</span>
+                  <span class="skill-row__bar">
+                    <span class="skill-row__fill {% if s._usage7d == 0 %}skill-row__fill--empty{% endif %}"
+                          style="width: {{ (s._usage7d / peak * 100) | round(0) | int }}%"></span>
+                  </span>
+                  <span class="skill-row__count">
+                    {% if s._usage7d > 0 %}{{ s._usage7d }}×{% else %}—{% endif %}
+                  </span>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+          {% if skills|length > 12 %}
+            <div class="dim mono" style="font-size:11px;text-align:center">
+              + {{ skills|length - 12 }} more
+            </div>
+          {% endif %}
+        {% else %}
+          <div class="empty" style="padding:var(--space-4)">
+            No skills found. (Is gbrain installed?)
+          </div>
+        {% endif %}
+
+        {% if top_tools %}
+          <div class="section-h" style="margin-top:var(--space-2)">Top tools (7d)</div>
+          <div>
+            {% for t in top_tools[:8] %}
+              <div class="activity-row">
+                <span class="activity-row__dot activity-row__dot--ok"></span>
+                <span class="activity-row__name mono" style="font-size:var(--fs-xs)">{{ t.name }}</span>
+                <span class="activity-row__meta">{{ t.count }}×</span>
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </section>
+
+      {# ───────── DID ───────── #}
+      <section class="activity-panel activity-panel--did">
+        <div class="activity-panel__head">
+          <div class="activity-panel__title">Did — recent activity</div>
+          <div class="activity-panel__count">{{ feed|length }} events</div>
+        </div>
+        {% if feed %}
+          <div>
+            {% for e in feed %}
+              {% set is_err = (e.outcome == 'error') %}
+              <div class="activity-row">
+                <span class="activity-row__dot {% if is_err %}activity-row__dot--err{% else %}activity-row__dot--ok{% endif %}"></span>
+                <span class="activity-row__name mono" style="font-size:var(--fs-xs)">
+                  {{ e.source }} · {{ e.name }}
+                </span>
+                <span class="activity-row__sub muted">{{ e.summary or '' }}</span>
+                <span class="activity-row__meta">
+                  {{ e.ts[:19] if e.ts else '' }}
+                  {% if e.latency_ms is defined and e.latency_ms is not none %}
+                    · {{ e.latency_ms }}ms
+                  {% endif %}
+                </span>
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="empty" style="padding:var(--space-5)">
+            No activity yet. Ask Hermes a question — events show up here in real time.
+          </div>
+        {% endif %}
+      </section>
+
+    </div>
+
+    <p class="dim mono" style="font-size:11px;margin-top:var(--space-5)">
+      Auto-refreshes every 20s. Activity log lives at
+      <code>$HERMES_HOME/activity/activity-YYYY-Www.jsonl</code>.
+    </p>
+  </div>
+</main>
+
+{% include "genui/_compose.html" %}
+
+</body>
+</html>
