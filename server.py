@@ -374,15 +374,65 @@ def unmask(new: dict[str, str], existing: dict[str, str]) -> dict[str, str]:
 # Cookies are auto-included on every same-origin request (navigation + XHR)
 # so both the setup UI and the proxied Hermes dashboard work with one login.
 #
-# The SECRET is regenerated on every process start. That means any ADMIN_PASSWORD
-# change via Railway → redeploy → all existing cookies invalidate → users re-login.
+# Cookie lifetime defaults to 90 days. The signing SECRET is persisted to
+# /data/.hermes/cookie-secret (mode 0600) so it survives Railway redeploys —
+# without this, every `git push` invalidates all sessions because the
+# secret regenerated at process start. The persistent volume survives crashes
+# and redeploys; only volume deletion or an explicit COOKIE_SECRET env var
+# rotates the secret. To force re-login of all sessions, delete the file or
+# set COOKIE_SECRET to a new value on Railway.
 import hashlib as _hashlib
 import hmac as _hmac
 from urllib.parse import quote as _url_quote, urlparse as _urlparse
 
 COOKIE_NAME = "hermes_auth"
-COOKIE_MAX_AGE = 7 * 86400  # 7 days
-COOKIE_SECRET = secrets.token_bytes(32)
+try:
+    COOKIE_MAX_AGE_DAYS = max(1, int(os.environ.get("COOKIE_MAX_AGE_DAYS", "90")))
+except ValueError:
+    COOKIE_MAX_AGE_DAYS = 90
+COOKIE_MAX_AGE = COOKIE_MAX_AGE_DAYS * 86400
+
+
+def _resolve_cookie_secret() -> bytes:
+    """Load (or initialize) the cookie-signing secret.
+
+    Resolution order:
+      1. `$COOKIE_SECRET` env var (operator override; takes effect on next boot).
+      2. /data/.hermes/cookie-secret if it exists (persistent volume).
+      3. Generate fresh, persist to /data/.hermes/cookie-secret, return it.
+
+    Falls back to an in-memory secret if the persistent volume isn't
+    writable (local dev) — caller sees an ephemeral secret that resets on
+    restart, matching the legacy behavior.
+    """
+    env_override = os.environ.get("COOKIE_SECRET", "").strip()
+    if env_override:
+        # Hash the env var so any string length works as a key.
+        return _hashlib.sha256(env_override.encode("utf-8")).digest()
+    secret_path = Path("/data/.hermes/cookie-secret")
+    try:
+        if secret_path.exists():
+            data = secret_path.read_bytes().strip()
+            if len(data) >= 32:
+                return data[:32]
+        # Generate + persist with restrictive perms.
+        secret_path.parent.mkdir(parents=True, exist_ok=True)
+        fresh = secrets.token_bytes(32)
+        tmp = secret_path.with_suffix(".tmp")
+        tmp.write_bytes(fresh)
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass  # best-effort on platforms without POSIX perms
+        tmp.replace(secret_path)
+        return fresh
+    except OSError:
+        # No persistent volume available (likely local dev). Fall back to
+        # the legacy in-memory secret so we don't fail to boot.
+        return secrets.token_bytes(32)
+
+
+COOKIE_SECRET = _resolve_cookie_secret()
 
 # Public paths — no auth required. Everything else is behind the cookie gate.
 PUBLIC_PATHS = {"/health", "/login", "/logout"}
@@ -519,12 +569,22 @@ async def login_post(request: Request) -> Response:
     valid_pw = _hmac.compare_digest(password, ADMIN_PASSWORD)
     if valid_user and valid_pw:
         resp = RedirectResponse(return_to, status_code=302)
+        # `secure=True` keeps the cookie HTTPS-only on Railway (and Railway
+        # terminates TLS at the edge — XFP is the signal). Browsers reject
+        # `secure` cookies over plain HTTP, so local-http dev sessions would
+        # silently break: when the request is plain HTTP we don't set the
+        # flag.
+        is_https = (
+            request.url.scheme == "https"
+            or request.headers.get("x-forwarded-proto", "").lower() == "https"
+        )
         resp.set_cookie(
             COOKIE_NAME,
             _make_auth_token(),
             max_age=COOKIE_MAX_AGE,
             httponly=True,
             samesite="lax",
+            secure=is_https,
             path="/",
         )
         return resp
