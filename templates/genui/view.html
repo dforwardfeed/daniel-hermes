@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ view.name }} — Hermes</title>
+{% include "genui/_design.html" %}
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar__inner container">
+    <div class="topbar__lead">
+      <div class="topbar__eyebrow truncate">
+        <span class="badge badge--accent">view</span>
+        <span class="dim mono">{{ open_items|length }} open · {{ done_items|length }} done</span>
+      </div>
+      <h1 class="topbar__title">{{ view.name }}</h1>
+    </div>
+    <div class="topbar__meta">
+      <a class="btn btn--sm" href="/ui/views">Views</a>
+      <a class="btn btn--sm" href="/ui/saved">Library</a>
+      <a class="btn btn--sm" href="/ui/daily">Daily</a>
+      {% for v in (topbar_views or []) if v.slug != view.slug %}
+        <a class="btn btn--sm" href="/ui/view/{{ v.slug }}" title="View: {{ v.name }}">{{ v.name }}</a>
+      {% endfor %}
+      <button class="btn btn--sm btn--danger" id="view-delete-btn"
+              data-slug="{{ view.slug }}">Delete view</button>
+    </div>
+  </div>
+</header>
+
+<main class="app-shell">
+  <div class="container container--md">
+    <div class="stack stack--lg">
+
+      {% if view.description %}
+      <p class="muted" style="margin-top:0">{{ view.description }}</p>
+      {% endif %}
+
+      <section class="card">
+        <form class="add-item" id="add-item-form" autocomplete="off">
+          <input class="add-item__input" id="add-item-input" name="text"
+                 placeholder="Add an item and press Enter" maxlength="2000"
+                 aria-label="Add an item">
+          <button class="btn btn--primary" type="submit">Add</button>
+        </form>
+      </section>
+
+      <section class="card">
+        {% if not open_items and not done_items %}
+          <div class="empty">No items yet. Ask Hermes to add some, or type one above.</div>
+        {% else %}
+          <ul class="checklist" id="checklist-open" role="list">
+            {% for item in open_items %}
+              <li class="checklist__item" data-item-id="{{ item.id }}">
+                <input type="checkbox" class="checklist__check"
+                       aria-label="Mark done"
+                       data-item-id="{{ item.id }}">
+                <div class="checklist__body">
+                  <span class="checklist__text">{{ item.text }}</span>
+                  <span class="checklist__when">added {{ item.createdAt[:10] }}</span>
+                </div>
+                <button class="checklist__remove" type="button"
+                        title="Remove" aria-label="Remove item"
+                        data-item-id="{{ item.id }}">×</button>
+              </li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+
+        {% if done_items %}
+          <div class="section-h" style="margin-top:var(--space-5)">Done</div>
+          <ul class="checklist" id="checklist-done" role="list">
+            {% for item in done_items %}
+              <li class="checklist__item checklist__item--done" data-item-id="{{ item.id }}">
+                <input type="checkbox" class="checklist__check"
+                       aria-label="Mark not done"
+                       checked
+                       data-item-id="{{ item.id }}">
+                <div class="checklist__body">
+                  <span class="checklist__text">{{ item.text }}</span>
+                  <span class="checklist__when">done {{ (item.doneAt or item.createdAt)[:10] }}</span>
+                </div>
+                <button class="checklist__remove" type="button"
+                        title="Remove" aria-label="Remove item"
+                        data-item-id="{{ item.id }}">×</button>
+              </li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      </section>
+
+      <p class="dim mono" style="font-size:11px">
+        slug: <code>{{ view.slug }}</code> · updated {{ view.updatedAt[:19] }}
+      </p>
+    </div>
+  </div>
+</main>
+
+<script>
+(function () {
+  /* All client mutations route through /api/ui/views/<slug>/... The cookie
+     ride carries auth; we don't need a bearer here. On success we toggle
+     local DOM state — no full page refresh. Failure path re-enables
+     controls and surfaces the error. */
+  var slug = {{ view.slug|tojson }};
+
+  function api(method, path, body) {
+    return fetch('/api/ui/views/' + encodeURIComponent(slug) + path, {
+      method: method,
+      headers: body ? { 'content-type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  }
+
+  /* Add-item form. */
+  var form = document.getElementById('add-item-form');
+  var input = document.getElementById('add-item-input');
+  if (form && input) {
+    form.addEventListener('submit', async function (e) {
+      e.preventDefault();
+      var text = (input.value || '').trim();
+      if (!text) return;
+      input.disabled = true;
+      try {
+        var r = await api('POST', '/items', { text: text });
+        if (r.ok) {
+          /* Cheapest correct behavior: reload so the new item lands in the
+             open list with proper server-stamped fields. Optimistic insert
+             would require duplicating the Jinja markup in JS — overkill. */
+          window.location.reload();
+        } else {
+          var err = await r.json().catch(function () { return {}; });
+          alert('Add failed: ' + (err.error || r.status));
+          input.disabled = false;
+          input.focus();
+        }
+      } catch (e) {
+        alert('Add failed: ' + e);
+        input.disabled = false;
+      }
+    });
+  }
+
+  /* Checkbox toggle. Optimistically flip the visual state, then PATCH;
+     on failure revert. */
+  document.querySelectorAll('.checklist__check').forEach(function (box) {
+    box.addEventListener('change', async function () {
+      var itemId = box.getAttribute('data-item-id');
+      var li = box.closest('.checklist__item');
+      var nowDone = box.checked;
+      if (li) li.classList.toggle('checklist__item--done', nowDone);
+      box.disabled = true;
+      try {
+        var r = await api('PATCH', '/items/' + encodeURIComponent(itemId), { done: nowDone });
+        if (!r.ok) {
+          /* Revert. */
+          box.checked = !nowDone;
+          if (li) li.classList.toggle('checklist__item--done', !nowDone);
+          var err = await r.json().catch(function () { return {}; });
+          alert('Update failed: ' + (err.error || r.status));
+        } else {
+          /* Re-sort the visible items by reloading — the open/done split
+             is server-side. Cheap; the view is small. */
+          window.location.reload();
+        }
+      } catch (e) {
+        box.checked = !nowDone;
+        if (li) li.classList.toggle('checklist__item--done', !nowDone);
+        alert('Update failed: ' + e);
+      } finally {
+        box.disabled = false;
+      }
+    });
+  });
+
+  /* Remove (×) button. */
+  document.querySelectorAll('.checklist__remove').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      if (!confirm('Remove this item?')) return;
+      var itemId = btn.getAttribute('data-item-id');
+      var li = btn.closest('.checklist__item');
+      btn.disabled = true;
+      try {
+        var r = await api('DELETE', '/items/' + encodeURIComponent(itemId));
+        if (r.ok && li && li.parentNode) {
+          li.parentNode.removeChild(li);
+        } else if (!r.ok) {
+          var err = await r.json().catch(function () { return {}; });
+          alert('Remove failed: ' + (err.error || r.status));
+          btn.disabled = false;
+        }
+      } catch (e) {
+        alert('Remove failed: ' + e);
+        btn.disabled = false;
+      }
+    });
+  });
+
+  /* Delete-view button (topbar). */
+  var delBtn = document.getElementById('view-delete-btn');
+  if (delBtn) {
+    delBtn.addEventListener('click', async function () {
+      if (!confirm('Delete this entire view and all its items? This is permanent.')) return;
+      delBtn.disabled = true;
+      try {
+        var r = await fetch('/api/ui/views/' + encodeURIComponent(slug), { method: 'DELETE' });
+        if (r.ok) { window.location.href = '/ui/views'; }
+        else { alert('Delete failed'); delBtn.disabled = false; }
+      } catch (e) { alert('Delete failed: ' + e); delBtn.disabled = false; }
+    });
+  }
+})();
+</script>
+</body>
+</html>

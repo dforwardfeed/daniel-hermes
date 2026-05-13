@@ -25,6 +25,10 @@
       <span class="dim mono">{{ art.createdAt }}</span>
       <a class="btn btn--sm" href="/ui/saved">Library</a>
       <a class="btn btn--sm" href="/ui/daily">Daily</a>
+      <a class="btn btn--sm" href="/ui/views">Views</a>
+      {% for v in (topbar_views or []) %}
+        <a class="btn btn--sm" href="/ui/view/{{ v.slug }}" title="View: {{ v.name }}">{{ v.name }}</a>
+      {% endfor %}
       {% if art.status != 'saved' %}
         <button class="btn btn--sm btn--primary" id="genui-save-btn">Save</button>
       {% endif %}

@@ -164,6 +164,12 @@ GBRAIN_BIN = "/data/.bun/bin/gbrain"
 # spawned by hermes as a subprocess when the two env vars below are set.
 CONSTELLATION_MCP_SCRIPT = "/app/constellation_mcp.py"
 
+# GenUI MCP server — wraps the same-container /api/ui/views API so the agent
+# can create user-defined views and mutate their items (add / mark done /
+# remove). Bearer-authenticated via GENUI_API_TOKEN (already used by the
+# Hermes/GBrain artifact path).
+GENUI_MCP_SCRIPT = "/app/genui_mcp.py"
+
 # Cross-prefix env vars that GBrain reads at runtime but which don't carry
 # our GENUI_/GBRAIN_ namespace. Forwarded explicitly when set on Hermes's
 # process env; missing/empty values are silently skipped (so the no-op
@@ -289,6 +295,43 @@ def _build_constellation_mcp_entry() -> dict | None:
     }
 
 
+def _build_genui_mcp_entry() -> dict | None:
+    """Construct the GenUI stdio MCP server entry for config.yaml, or None
+    if GenUI write-auth isn't configured.
+
+    Activates when GENUI_API_TOKEN is set AND the script is in the image.
+    The subprocess calls back into this same Starlette server via loopback
+    (default base_url = http://127.0.0.1:$PORT) so we don't need to forward
+    any external URL — only the bearer token. Forwarding follows the
+    GENUI_* prefix sweep used elsewhere; PORT is forwarded separately so
+    the subprocess can find the loopback target on Railway (where PORT is
+    dynamic).
+    """
+    token = os.environ.get("GENUI_API_TOKEN", "").strip()
+    if not token:
+        return None
+    if not Path(GENUI_MCP_SCRIPT).exists():
+        return None
+
+    forwarded_env: dict[str, str] = {}
+    for k, v in os.environ.items():
+        if k.startswith("GENUI_") and v:
+            forwarded_env[k] = v
+    # PORT tells genui_mcp.py which loopback port to call. Default value
+    # exists in the script too, but forwarding the real value avoids
+    # surprises on Railway where PORT is service-assigned.
+    if (port := os.environ.get("PORT", "").strip()):
+        forwarded_env["PORT"] = port
+
+    return {
+        "command": "python3",
+        "args": [GENUI_MCP_SCRIPT],
+        "env": forwarded_env,
+        "timeout": 60,
+        "connect_timeout": 30,
+    }
+
+
 def write_config_yaml(data: dict[str, str]) -> None:
     """Read-merge-write /data/.hermes/config.yaml.
 
@@ -357,6 +400,21 @@ def write_config_yaml(data: dict[str, str]) -> None:
             f"script_present={script_present})"
         )
 
+    genui_entry = _build_genui_mcp_entry()
+    if genui_entry is not None:
+        mcp_servers["genui"] = genui_entry
+        genui_status = (
+            f"registered (env_forwarded={len(genui_entry['env'])}, "
+            f"timeout={genui_entry['timeout']}s)"
+        )
+    else:
+        mcp_servers.pop("genui", None)
+        gtok_set = bool(os.environ.get("GENUI_API_TOKEN", "").strip())
+        gscript_present = Path(GENUI_MCP_SCRIPT).exists()
+        genui_status = (
+            f"skipped (token_set={gtok_set}, script_present={gscript_present})"
+        )
+
     if mcp_servers:
         existing["mcp_servers"] = mcp_servers
     else:
@@ -368,6 +426,7 @@ def write_config_yaml(data: dict[str, str]) -> None:
     )
     print(f"[hermes-config] mcp_servers.gbrain: {gbrain_status}", flush=True)
     print(f"[hermes-config] mcp_servers.constellation: {constellation_status}", flush=True)
+    print(f"[hermes-config] mcp_servers.genui: {genui_status}", flush=True)
 
 
 def write_env(path: Path, data: dict[str, str]) -> None:

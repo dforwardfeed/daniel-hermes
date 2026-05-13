@@ -72,10 +72,11 @@ RUN mkdir -p /data/.hermes
 COPY server.py /app/server.py
 COPY genui.py /app/genui.py
 COPY constellation_mcp.py /app/constellation_mcp.py
+COPY genui_mcp.py /app/genui_mcp.py
 COPY templates/ /app/templates/
 COPY start.sh /app/start.sh
 COPY install_gbrain.sh /app/install_gbrain.sh
-RUN chmod +x /app/start.sh /app/install_gbrain.sh /app/constellation_mcp.py
+RUN chmod +x /app/start.sh /app/install_gbrain.sh /app/constellation_mcp.py /app/genui_mcp.py
 
 # Vendored GBrain (Dbrain-hermes) source — only consumed when GBRAIN_SOURCE=local.
 # With the default GBRAIN_SOURCE=remote, install_gbrain.sh ignores this tree

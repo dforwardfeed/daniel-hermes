@@ -19,6 +19,10 @@
     </div>
     <div class="topbar__meta">
       <a class="btn btn--sm" href="/ui/daily">Daily</a>
+      <a class="btn btn--sm" href="/ui/views">Views</a>
+      {% for v in (topbar_views or []) %}
+        <a class="btn btn--sm" href="/ui/view/{{ v.slug }}" title="View: {{ v.name }}">{{ v.name }}</a>
+      {% endfor %}
       <a class="btn btn--sm" href="/setup">← Setup</a>
     </div>
   </div>

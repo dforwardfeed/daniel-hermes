@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Views — Hermes</title>
+{% include "genui/_design.html" %}
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar__inner container">
+    <div class="topbar__lead">
+      <div class="topbar__eyebrow">
+        <span class="badge badge--accent">views</span>
+        <span class="dim mono">{{ views|length }} view{{ '' if views|length == 1 else 's' }}</span>
+      </div>
+      <h1 class="topbar__title">Your Views</h1>
+    </div>
+    <div class="topbar__meta">
+      <a class="btn btn--sm" href="/ui/saved">Library</a>
+      <a class="btn btn--sm" href="/ui/daily">Daily</a>
+      {% for v in (topbar_views or []) %}
+        <a class="btn btn--sm" href="/ui/view/{{ v.slug }}" title="View: {{ v.name }}">{{ v.name }}</a>
+      {% endfor %}
+      <a class="btn btn--sm" href="/setup">← Setup</a>
+    </div>
+  </div>
+</header>
+
+<main class="app-shell">
+  <div class="container">
+
+  {% if not views %}
+    <div class="empty stack" style="gap:var(--space-3)">
+      <div>No views yet.</div>
+      <div class="dim mono" style="font-size:var(--fs-xs);max-width:48ch;margin-inline:auto">
+        Ask Hermes to create one. For example:<br>
+        <em>“Create a view called todo for my to-do list.”</em>
+      </div>
+    </div>
+  {% else %}
+
+  <div class="grid grid--cols-2">
+    {% for v in views %}
+      <a class="card card--interactive stack" href="/ui/view/{{ v.slug }}"
+         style="text-decoration:none;color:inherit">
+        <div class="cluster" style="justify-content:space-between;gap:var(--space-3)">
+          <div class="cluster">
+            <span class="badge badge--accent">{{ v.kind or 'checklist' }}</span>
+            {# Use bracket access — Jinja's `v.items` would resolve to
+               dict.items (the method), not the "items" key. #}
+            {% set _items = v["items"] or [] %}
+            <span class="dim mono">{{ _items|length }} item{{ '' if _items|length == 1 else 's' }}</span>
+          </div>
+          <span class="arrow-link">→</span>
+        </div>
+        <div class="strong" style="font-size:var(--fs-md)">{{ v.name }}</div>
+        {% if v.description %}
+          <div class="muted">{{ v.description }}</div>
+        {% endif %}
+        <div class="cluster dim mono" style="font-size:11px">
+          <span>slug: {{ v.slug }}</span>
+          <span>updated {{ v.updatedAt[:10] }}</span>
+        </div>
+      </a>
+    {% endfor %}
+  </div>
+
+  {% endif %}
+
+  </div>
+</main>
+
+</body>
+</html>

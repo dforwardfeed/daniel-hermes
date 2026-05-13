@@ -66,6 +66,7 @@ GENUI_AUTO_SAVE_CATEGORIES = {
 GENUI_API_TOKEN = os.environ.get("GENUI_API_TOKEN", "")
 
 ARTIFACTS_DIR = GENUI_STORAGE / "artifacts"
+VIEWS_DIR = GENUI_STORAGE / "views"
 
 
 # ── Validation tables ─────────────────────────────────────────────────────────
@@ -112,10 +113,28 @@ DAILY_CATEGORIES = {"daily_briefing", "briefing", "stats", "reports"}
 # `ui_` followed by URL-safe chars (no path traversal possible).
 ID_RE = re.compile(r"^ui_[A-Za-z0-9]{8,32}$")
 
+# View slugs are user-chosen names like "todo" or "reading-list".
+# Strict lowercase kebab-case; reserved slugs prevent route collisions.
+VIEW_SLUG_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+VIEW_SLUG_RESERVED = {
+    # Existing /ui/* path segments — colliding with them would 404 the user.
+    "latest", "saved", "daily", "views", "view",
+    # Defensive — keep these free for future use.
+    "new", "edit", "delete", "api", "admin", "settings",
+}
+# Item ids are short, dense, URL-safe; collision-free inside one view file.
+ITEM_ID_RE = re.compile(r"^i_[A-Za-z0-9]{8,24}$")
+VIEW_NAME_MAX = 120
+VIEW_DESC_MAX = 500
+ITEM_TEXT_MAX = 2000
+VIEW_ITEMS_MAX = 1000      # hard cap per view; defensive against bloat
+VIEW_NAV_MAX = 12          # max custom views surfaced in the topbar nav
+
 
 # ── Storage helpers ───────────────────────────────────────────────────────────
 def _ensure_dirs() -> None:
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    VIEWS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _now_iso() -> str:
@@ -170,6 +189,189 @@ def _save_artifact(art: dict) -> None:
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(art, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(p)
+
+
+# ── Views: user-defined live sections (checklists today, more later) ─────────
+def _ensure_views_dir() -> None:
+    VIEWS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _view_path_for(slug: str) -> Path | None:
+    """Resolve a slug to its on-disk path, or None if the slug is invalid.
+    The reserved-slug + regex check guarantees no path-traversal and no
+    collision with the static /ui/* routes."""
+    if not isinstance(slug, str) or not VIEW_SLUG_RE.match(slug):
+        return None
+    if slug in VIEW_SLUG_RESERVED:
+        return None
+    return VIEWS_DIR / f"{slug}.json"
+
+
+def _new_item_id() -> str:
+    raw = secrets.token_urlsafe(12).replace("-", "").replace("_", "")
+    return f"i_{raw[:12].ljust(12, 'a')}"
+
+
+def _slugify(name: str) -> str:
+    """Best-effort kebab-case slug from a free-text name. The caller is
+    expected to validate the result against VIEW_SLUG_RE before persisting;
+    we don't trust this output as a primary key on its own."""
+    s = name.lower().strip()
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    return s[:48] or "view"
+
+
+def _validate_view_create(body: dict) -> tuple[dict, list[str]]:
+    """Validate a POST /api/ui/views body. Returns (view, errors).
+    On success, view is the persistable record with id, timestamps, and
+    a normalized items list (callers can pass items at create time so a
+    view can be seeded in one call)."""
+    errs: list[str] = []
+    if not isinstance(body, dict):
+        return ({}, ["body must be a JSON object"])
+
+    name = body.get("name", "")
+    if not isinstance(name, str) or not name.strip():
+        errs.append("name (string) is required")
+        name = ""
+    if len(name) > VIEW_NAME_MAX:
+        errs.append(f"name must be <= {VIEW_NAME_MAX} chars")
+
+    raw_slug = body.get("slug")
+    slug = raw_slug.strip() if isinstance(raw_slug, str) and raw_slug.strip() else _slugify(name)
+    if not VIEW_SLUG_RE.match(slug):
+        errs.append("slug must be lowercase kebab-case [a-z][a-z0-9-]+")
+    if slug in VIEW_SLUG_RESERVED:
+        errs.append(f"slug `{slug}` is reserved; pick another")
+
+    description = body.get("description", "") or ""
+    if not isinstance(description, str):
+        errs.append("description must be a string")
+        description = ""
+    if len(description) > VIEW_DESC_MAX:
+        errs.append(f"description must be <= {VIEW_DESC_MAX} chars")
+
+    kind = body.get("kind", "checklist")
+    if kind != "checklist":
+        # MVP supports one kind. Reject early so future kinds don't silently
+        # fall through and render as checklists.
+        errs.append("kind must be 'checklist' (only kind supported in MVP)")
+
+    raw_items = body.get("items") or []
+    if not isinstance(raw_items, list):
+        errs.append("items must be an array")
+        raw_items = []
+    items: list[dict] = []
+    for i, raw in enumerate(raw_items):
+        item, item_errs = _validate_item_input(raw)
+        if item_errs:
+            errs.extend(f"items[{i}]: {e}" for e in item_errs)
+            continue
+        items.append(item)
+    if len(items) > VIEW_ITEMS_MAX:
+        errs.append(f"items must be <= {VIEW_ITEMS_MAX}")
+
+    if errs:
+        return ({}, errs)
+
+    now = _now_iso()
+    view = {
+        "slug": slug,
+        "name": name.strip(),
+        "description": description.strip(),
+        "kind": kind,
+        "items": items,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+    return (view, [])
+
+
+def _validate_item_input(raw: object) -> tuple[dict, list[str]]:
+    """Validate an item body for create OR full-replace. Items are
+    {id?, text, done?, created_at?, done_at?, note?}. Server fills missing
+    id + timestamps. Returns (item, errors)."""
+    errs: list[str] = []
+    if not isinstance(raw, dict):
+        return ({}, ["must be an object"])
+    text = raw.get("text", "")
+    if not isinstance(text, str) or not text.strip():
+        errs.append("text (string) is required")
+    if isinstance(text, str) and len(text) > ITEM_TEXT_MAX:
+        errs.append(f"text must be <= {ITEM_TEXT_MAX} chars")
+    done = raw.get("done", False)
+    if not isinstance(done, bool):
+        errs.append("done must be a boolean")
+        done = False
+    note = raw.get("note")
+    if note is not None and not isinstance(note, str):
+        errs.append("note must be a string when provided")
+        note = None
+    if errs:
+        return ({}, errs)
+
+    item_id = raw.get("id")
+    if not (isinstance(item_id, str) and ITEM_ID_RE.match(item_id)):
+        item_id = _new_item_id()
+    now = _now_iso()
+    item: dict = {
+        "id": item_id,
+        "text": text.strip(),
+        "done": bool(done),
+        "createdAt": raw.get("createdAt") if isinstance(raw.get("createdAt"), str) else now,
+    }
+    if done and isinstance(raw.get("doneAt"), str):
+        item["doneAt"] = raw["doneAt"]
+    elif done:
+        item["doneAt"] = now
+    if note:
+        item["note"] = note.strip()
+    return (item, [])
+
+
+def _load_view(slug: str) -> dict | None:
+    p = _view_path_for(slug)
+    if p is None or not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _save_view(view: dict) -> None:
+    _ensure_views_dir()
+    p = _view_path_for(view["slug"])
+    if p is None:
+        raise ValueError("invalid view slug")
+    view["updatedAt"] = _now_iso()
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(view, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(p)
+
+
+def _list_views() -> list[dict]:
+    """Return all views, sorted by updatedAt desc. Tolerates malformed
+    individual files — drops them silently and keeps going."""
+    _ensure_views_dir()
+    out: list[dict] = []
+    for f in VIEWS_DIR.glob("*.json"):
+        try:
+            v = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(v, dict) and v.get("slug"):
+            out.append(v)
+    out.sort(key=lambda v: v.get("updatedAt", ""), reverse=True)
+    return out
+
+
+def _topbar_views() -> list[dict]:
+    """Compact list for the shared topbar — only slug + name, capped.
+    Every page-render handler passes this to the template context so the
+    nav reflects the current set of custom views without polling JS."""
+    return [{"slug": v.get("slug", ""), "name": v.get("name", "")}
+            for v in _list_views()[:VIEW_NAV_MAX]]
 
 
 def _list_artifacts(
@@ -1159,6 +1361,283 @@ async def api_delete(request: Request) -> Response:
     return JSONResponse({"ok": True})
 
 
+# ── Views API ─────────────────────────────────────────────────────────────────
+# CRUD on views and their items. Cookie OR bearer auth (same as artifacts).
+# Atomic file writes via .tmp + replace. Every mutation bumps view.updatedAt
+# so /list sorts naturally.
+
+async def api_views_list(request: Request) -> Response:
+    if not GENUI_ENABLED:
+        return _disabled()
+    if err := _api_guard(request):
+        return err
+    views = _list_views()
+    summaries = [
+        {
+            "slug": v.get("slug", ""),
+            "name": v.get("name", ""),
+            "description": v.get("description", ""),
+            "kind": v.get("kind", "checklist"),
+            "itemCount": len(v.get("items", []) or []),
+            "createdAt": v.get("createdAt", ""),
+            "updatedAt": v.get("updatedAt", ""),
+        }
+        for v in views
+    ]
+    return JSONResponse({"views": summaries, "count": len(summaries)})
+
+
+async def api_views_create(request: Request) -> Response:
+    if not GENUI_ENABLED:
+        return _disabled()
+    if err := _api_guard(request):
+        return err
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    view, errs = _validate_view_create(body)
+    if errs:
+        print(
+            f"[genui] rejected POST /api/ui/views (400) "
+            f"client={request.client.host if request.client else 'unknown'} "
+            f"errs={errs[:5]}",
+            flush=True,
+        )
+        return JSONResponse({"error": "validation failed", "details": errs}, status_code=400)
+
+    # Refuse to clobber an existing view via POST — callers should PATCH.
+    if _load_view(view["slug"]) is not None:
+        return JSONResponse(
+            {"error": "slug exists", "slug": view["slug"]},
+            status_code=409,
+        )
+
+    try:
+        _save_view(view)
+    except OSError:
+        return JSONResponse({"error": "failed to persist view"}, status_code=500)
+
+    auth_via = "bearer" if _has_api_token(request) else "cookie"
+    print(
+        f"[genui] view created slug={view['slug']} kind={view['kind']} "
+        f"items={len(view['items'])} auth={auth_via}",
+        flush=True,
+    )
+
+    base = _base_url(request)
+    return JSONResponse(
+        {
+            "slug": view["slug"],
+            "url": f"{base}/ui/view/{view['slug']}",
+            "name": view["name"],
+            "itemCount": len(view["items"]),
+        },
+        status_code=201,
+    )
+
+
+async def api_views_get(request: Request) -> Response:
+    if not GENUI_ENABLED:
+        return _disabled()
+    if err := _api_guard(request):
+        return err
+    view = _load_view(request.path_params["slug"])
+    if view is None:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return JSONResponse(view)
+
+
+async def api_views_update(request: Request) -> Response:
+    """PATCH /api/ui/views/{slug} — rename or re-describe a view. Items are
+    managed via the per-item endpoints below; this is metadata-only so a
+    bulk-payload PUT can't accidentally wipe items."""
+    if not GENUI_ENABLED:
+        return _disabled()
+    if err := _api_guard(request):
+        return err
+    view = _load_view(request.path_params["slug"])
+    if view is None:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "body must be an object"}, status_code=400)
+
+    errs: list[str] = []
+    if "name" in body:
+        new_name = body["name"]
+        if not isinstance(new_name, str) or not new_name.strip():
+            errs.append("name must be a non-empty string")
+        elif len(new_name) > VIEW_NAME_MAX:
+            errs.append(f"name must be <= {VIEW_NAME_MAX} chars")
+        else:
+            view["name"] = new_name.strip()
+    if "description" in body:
+        new_desc = body["description"]
+        if not isinstance(new_desc, str):
+            errs.append("description must be a string")
+        elif len(new_desc) > VIEW_DESC_MAX:
+            errs.append(f"description must be <= {VIEW_DESC_MAX} chars")
+        else:
+            view["description"] = new_desc.strip()
+    if errs:
+        return JSONResponse({"error": "validation failed", "details": errs}, status_code=400)
+
+    try:
+        _save_view(view)
+    except OSError:
+        return JSONResponse({"error": "failed to persist view"}, status_code=500)
+    return JSONResponse({"ok": True, "slug": view["slug"]})
+
+
+async def api_views_delete(request: Request) -> Response:
+    if not GENUI_ENABLED:
+        return _disabled()
+    if err := _api_guard(request):
+        return err
+    p = _view_path_for(request.path_params["slug"])
+    if p is None or not p.exists():
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    try:
+        p.unlink()
+    except OSError:
+        return JSONResponse({"error": "delete failed"}, status_code=500)
+    print(f"[genui] view deleted slug={request.path_params['slug']}", flush=True)
+    return JSONResponse({"ok": True})
+
+
+async def api_view_item_create(request: Request) -> Response:
+    """POST /api/ui/views/{slug}/items — append an item. Returns the new
+    item including the server-assigned id so the caller (the agent or a
+    future browser-side form) can echo it back in subsequent calls."""
+    if not GENUI_ENABLED:
+        return _disabled()
+    if err := _api_guard(request):
+        return err
+    view = _load_view(request.path_params["slug"])
+    if view is None:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    item, errs = _validate_item_input(body)
+    if errs:
+        return JSONResponse({"error": "validation failed", "details": errs}, status_code=400)
+
+    items = view.get("items") or []
+    if len(items) >= VIEW_ITEMS_MAX:
+        return JSONResponse(
+            {"error": f"view at item cap ({VIEW_ITEMS_MAX})"},
+            status_code=409,
+        )
+    items.append(item)
+    view["items"] = items
+    try:
+        _save_view(view)
+    except OSError:
+        return JSONResponse({"error": "failed to persist view"}, status_code=500)
+    return JSONResponse({"ok": True, "item": item}, status_code=201)
+
+
+async def api_view_item_update(request: Request) -> Response:
+    """PATCH /api/ui/views/{slug}/items/{item_id} — toggle done or edit
+    text/note. Accepts a partial body: {done?, text?, note?}.
+    The browser's checkbox calls this with just {done: true|false}."""
+    if not GENUI_ENABLED:
+        return _disabled()
+    if err := _api_guard(request):
+        return err
+    view = _load_view(request.path_params["slug"])
+    if view is None:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "body must be an object"}, status_code=400)
+
+    item_id = request.path_params["item_id"]
+    if not ITEM_ID_RE.match(item_id or ""):
+        return JSONResponse({"error": "invalid item id"}, status_code=400)
+
+    items = view.get("items") or []
+    idx = next((i for i, it in enumerate(items) if it.get("id") == item_id), -1)
+    if idx < 0:
+        return JSONResponse({"error": "Item not found"}, status_code=404)
+
+    current = items[idx]
+    errs: list[str] = []
+    if "done" in body:
+        new_done = body["done"]
+        if not isinstance(new_done, bool):
+            errs.append("done must be a boolean")
+        else:
+            current["done"] = new_done
+            # Stamp / clear doneAt symmetrically so the UI doesn't display
+            # a stale completion timestamp on a re-opened item.
+            if new_done:
+                current["doneAt"] = _now_iso()
+            else:
+                current.pop("doneAt", None)
+    if "text" in body:
+        new_text = body["text"]
+        if not isinstance(new_text, str) or not new_text.strip():
+            errs.append("text must be a non-empty string")
+        elif len(new_text) > ITEM_TEXT_MAX:
+            errs.append(f"text must be <= {ITEM_TEXT_MAX} chars")
+        else:
+            current["text"] = new_text.strip()
+    if "note" in body:
+        new_note = body["note"]
+        if new_note is None:
+            current.pop("note", None)
+        elif isinstance(new_note, str):
+            current["note"] = new_note.strip()
+        else:
+            errs.append("note must be a string or null")
+    if errs:
+        return JSONResponse({"error": "validation failed", "details": errs}, status_code=400)
+
+    items[idx] = current
+    view["items"] = items
+    try:
+        _save_view(view)
+    except OSError:
+        return JSONResponse({"error": "failed to persist view"}, status_code=500)
+    return JSONResponse({"ok": True, "item": current})
+
+
+async def api_view_item_delete(request: Request) -> Response:
+    if not GENUI_ENABLED:
+        return _disabled()
+    if err := _api_guard(request):
+        return err
+    view = _load_view(request.path_params["slug"])
+    if view is None:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    item_id = request.path_params["item_id"]
+    if not ITEM_ID_RE.match(item_id or ""):
+        return JSONResponse({"error": "invalid item id"}, status_code=400)
+
+    items = view.get("items") or []
+    new_items = [it for it in items if it.get("id") != item_id]
+    if len(new_items) == len(items):
+        return JSONResponse({"error": "Item not found"}, status_code=404)
+    view["items"] = new_items
+    try:
+        _save_view(view)
+    except OSError:
+        return JSONResponse({"error": "failed to persist view"}, status_code=500)
+    return JSONResponse({"ok": True})
+
+
 # ── line_chart SVG coordinate pre-compute ─────────────────────────────────────
 # Doing this in Python (rather than via Jinja math) keeps the template flat:
 # it just iterates pre-rendered series/x_labels/y_ticks. Pure function — no
@@ -1680,6 +2159,7 @@ def _render_artifact(request: Request, art: dict) -> Response:
         "payload": payload,
         "kind": rs.get("kind", ""),
         "supported_templates": sorted(SUPPORTED_TEMPLATES),
+        "topbar_views": _topbar_views(),
     }
 
     # Per-render-kind context preparation. Patterns:
@@ -1792,6 +2272,7 @@ async def page_saved_index(request: Request) -> Response:
             "items": items,
             "by_date": dict(sorted(by_date.items(), reverse=True)),
             "by_category": dict(sorted(by_category.items())),
+            "topbar_views": _topbar_views(),
         },
     )
 
@@ -1815,7 +2296,64 @@ async def page_daily(request: Request) -> Response:
     return _templates.TemplateResponse(
         request,
         "genui/daily.html",
-        {"items": deduped},
+        {"items": deduped, "topbar_views": _topbar_views()},
+    )
+
+
+async def page_views_index(request: Request) -> Response:
+    """List all user-defined views. Sibling of /ui/saved."""
+    if not GENUI_ENABLED:
+        return HTMLResponse("GenUI disabled", status_code=503)
+    if err := _ui_guard(request):
+        return err
+    views = _list_views()
+    assert _templates is not None
+    return _templates.TemplateResponse(
+        request,
+        "genui/views_index.html",
+        {"views": views, "topbar_views": _topbar_views()},
+    )
+
+
+async def page_view(request: Request) -> Response:
+    """Render one user-defined view by slug. Interactive — checkbox clicks
+    fire PATCH on the item API. Topbar carries Save/Delete affordances
+    scoped to the view itself, not to artifacts."""
+    if not GENUI_ENABLED:
+        return HTMLResponse("GenUI disabled", status_code=503)
+    if err := _ui_guard(request):
+        return err
+    slug = request.path_params["slug"]
+    view = _load_view(slug)
+    if view is None:
+        return HTMLResponse(
+            "<!doctype html><meta charset=utf-8>"
+            "<title>View not found</title>"
+            "<body style='background:#0b0c0e;color:#a4a7b0;"
+            "font-family:system-ui,sans-serif;padding:40px'>"
+            f"<h1 style='color:#ededf0'>View &ldquo;{slug}&rdquo; not found</h1>"
+            "<p><a style='color:#7c89ff' href='/ui/views'>Back to views</a></p>",
+            status_code=404,
+        )
+
+    # Partition items so the template can render open + done with one pass each.
+    items = view.get("items") or []
+    open_items = [it for it in items if not it.get("done")]
+    done_items = [it for it in items if it.get("done")]
+    # Newest first for both — feels natural in a checklist.
+    open_items.sort(key=lambda it: it.get("createdAt", ""), reverse=True)
+    done_items.sort(key=lambda it: it.get("doneAt") or it.get("createdAt", ""), reverse=True)
+
+    assert _templates is not None
+    return _templates.TemplateResponse(
+        request,
+        "genui/view.html",
+        {
+            "view": view,
+            "open_items": open_items,
+            "done_items": done_items,
+            "topbar_views": _topbar_views(),
+        },
     )
 
 
@@ -1873,8 +2411,21 @@ def get_routes(
         Route("/api/ui/artifacts/{id}/save", api_save, methods=["POST"]),
         Route("/api/ui/artifacts/{id}", api_get, methods=["GET"]),
         Route("/api/ui/artifacts/{id}", api_delete, methods=["DELETE"]),
+        # Views API — collection routes first, then item-scoped routes.
+        Route("/api/ui/views", api_views_list, methods=["GET"]),
+        Route("/api/ui/views", api_views_create, methods=["POST"]),
+        Route("/api/ui/views/{slug}", api_views_get, methods=["GET"]),
+        Route("/api/ui/views/{slug}", api_views_update, methods=["PATCH"]),
+        Route("/api/ui/views/{slug}", api_views_delete, methods=["DELETE"]),
+        Route("/api/ui/views/{slug}/items", api_view_item_create, methods=["POST"]),
+        Route("/api/ui/views/{slug}/items/{item_id}", api_view_item_update, methods=["PATCH"]),
+        Route("/api/ui/views/{slug}/items/{item_id}", api_view_item_delete, methods=["DELETE"]),
+        # Artifact + standalone pages.
         Route("/ui/latest/{id}", page_latest, methods=["GET"]),
         Route("/ui/saved", page_saved_index, methods=["GET"]),
         Route("/ui/saved/{id}", page_saved_one, methods=["GET"]),
         Route("/ui/daily", page_daily, methods=["GET"]),
+        # User-defined views — index + per-view permalinks.
+        Route("/ui/views", page_views_index, methods=["GET"]),
+        Route("/ui/view/{slug}", page_view, methods=["GET"]),
     ]

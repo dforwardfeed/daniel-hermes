@@ -975,6 +975,116 @@
     font-style: normal;
   }
 
+  /* ─── Checklist (user-defined views) ──────────────────────────────── */
+  .checklist {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .checklist__item {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    transition: background var(--dur-fast) var(--ease);
+    cursor: default;
+  }
+  .checklist__item:hover { background: var(--bg-overlay); }
+  .checklist__item--done .checklist__text {
+    color: var(--text-tertiary);
+    text-decoration: line-through;
+    text-decoration-color: var(--border-strong);
+    text-decoration-thickness: 1px;
+  }
+  .checklist__item--done .checklist__when { color: var(--text-tertiary); }
+  .checklist__check {
+    appearance: none;
+    -webkit-appearance: none;
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    margin-top: 2px;
+    border: 1.5px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--bg-app);
+    cursor: pointer;
+    position: relative;
+    transition: background var(--dur-fast) var(--ease),
+                border-color var(--dur-fast) var(--ease);
+  }
+  .checklist__check:hover { border-color: var(--accent); }
+  .checklist__check:checked {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .checklist__check:checked::after {
+    content: '';
+    position: absolute;
+    left: 5px; top: 1px;
+    width: 5px; height: 10px;
+    border-right: 2px solid var(--accent-fg);
+    border-bottom: 2px solid var(--accent-fg);
+    transform: rotate(45deg);
+  }
+  .checklist__check:disabled { opacity: 0.5; cursor: not-allowed; }
+  .checklist__body {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .checklist__text {
+    color: var(--text-primary);
+    font-size: var(--fs-base);
+    line-height: 1.45;
+    word-break: break-word;
+  }
+  .checklist__when {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-tertiary);
+    letter-spacing: 0.04em;
+  }
+  .checklist__remove {
+    flex: 0 0 auto;
+    width: 28px; height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-tertiary);
+    border-radius: var(--radius-md);
+    opacity: 0;
+    transition: opacity var(--dur-fast) var(--ease),
+                color var(--dur-fast) var(--ease),
+                background var(--dur-fast) var(--ease);
+  }
+  .checklist__item:hover .checklist__remove { opacity: 1; }
+  .checklist__remove:hover {
+    color: var(--danger);
+    background: var(--danger-subtle);
+  }
+
+  /* Add-item input row at the top of a view. */
+  .add-item {
+    display: flex;
+    gap: var(--space-2);
+    align-items: stretch;
+  }
+  .add-item__input {
+    flex: 1 1 auto;
+    background: var(--bg-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--fs-base);
+    transition: border-color var(--dur-fast) var(--ease);
+  }
+  .add-item__input:focus { border-color: var(--accent); outline: none; }
+  .add-item__input::placeholder { color: var(--text-tertiary); }
+
   /* ─── Segmented control (tabs) ────────────────────────────────────── */
   .seg {
     display: inline-flex;

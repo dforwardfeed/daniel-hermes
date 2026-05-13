@@ -451,6 +451,42 @@ Cutover is reversible. The default stays `remote` so you can flip back at any ti
 | `GBRAIN_LOCAL_SOURCE_DIR` | `/app/gbrain` | local | Where the in-image vendored tree lives |
 | `GBRAIN_REQUIRED` | `false` | both | If `true`, install failures abort container boot |
 
+## Custom user-defined views
+
+Beyond the three built-in surfaces (Latest / Saved / Daily), the GenUI portal
+supports **user-defined views** — persistent named sections you create via
+chat. Today's only kind is `checklist`: a to-do-style list with strikethrough,
+inline checkbox interactivity, and per-item add/remove. Each view appears at
+`/ui/view/<slug>` and shows up in the shared topbar nav across every page.
+
+The agent manages views via six MCP tools (auto-namespaced as
+`mcp_genui_*` once registered): `list_views`, `create_view`, `delete_view`,
+`add_item`, `mark_done`, `remove_item`. Activation requires only
+`GENUI_API_TOKEN` (already set for the artifact API) — the server registers
+the `genui` MCP entry automatically.
+
+Try in Telegram:
+
+- *"Create a view called todo for my to-do list."*
+- *"Add 'call accountant' to my todo list."*
+- *"What's on my todo list?"*
+- *"Mark 'call accountant' as done."*
+
+Checkboxes on the rendered view are interactive — click in the browser to
+toggle done state; the agent and the UI share the same source of truth via
+`/api/ui/views/<slug>/items/<id>` (cookie OR bearer auth, same as
+`/api/ui/artifacts`).
+
+| Variable | Default | Description |
+|---|---|---|
+| `GENUI_API_TOKEN` | *(unset)* | Required for `mcp_genui_*` tools. Same token as the existing artifact API. |
+| `GENUI_VIEWS_DIR` | `$GENUI_STORAGE/views` | Where view JSON files persist (one per slug). Survives Railway redeploys when GENUI_STORAGE is on `/data`. |
+
+Views are stored as plain JSON files at `/data/genui/views/<slug>.json` —
+human-readable, hand-editable, and version-controllable. The MCP subprocess
+calls back into the same-container Starlette server via loopback, so no
+external network is involved.
+
 ## Constellation (read-only YouTube-insight library)
 
 Hermes can also query the user's **Constellation** library — a separate app
