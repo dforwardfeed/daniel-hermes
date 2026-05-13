@@ -451,6 +451,32 @@ Cutover is reversible. The default stays `remote` so you can flip back at any ti
 | `GBRAIN_LOCAL_SOURCE_DIR` | `/app/gbrain` | local | Where the in-image vendored tree lives |
 | `GBRAIN_REQUIRED` | `false` | both | If `true`, install failures abort container boot |
 
+## Constellation (read-only YouTube-insight library)
+
+Hermes can also query the user's **Constellation** library — a separate app
+that summarizes YouTube videos and stores the user's saved insights under
+two parallel Brains (Original = life/business; AI = AI research). The
+integration ships as a stdio MCP server (`constellation_mcp.py`) registered
+alongside GBrain.
+
+Set both env vars on Railway to activate it; leave them unset to disable:
+
+| Variable | Default | Description |
+|---|---|---|
+| `CONSTELLATION_BASE_URL` | *(unset)* | The deployed Constellation API root, e.g. `https://your-constellation.replit.app`. No trailing slash. |
+| `CONSTELLATION_API_TOKEN` | *(unset)* | The Constellation `AGENT_API_TOKEN` secret. Sent as `Authorization: Bearer <token>` on every API call. Forwarded to the MCP subprocess and never logged. |
+| `CONSTELLATION_TIMEOUT` | `30` | HTTP request timeout in seconds. |
+
+When both are present, the boot log shows:
+`[hermes-config] mcp_servers.constellation: registered (env_forwarded=N, timeout=60s)`.
+Hermes namespaces the tools as `mcp_constellation_*`. Six tools are exposed:
+`categories`, `search`, `semantic_search`, `library`, `library_all`, `get_video`.
+
+Ask Hermes naturally — *"What's my Brain saying about agent memory?"*,
+*"Show me my Sales & GTM insights"*, *"Find every block that mentions PMF"* —
+and it picks the right tool. The full API spec is documented at
+`<CONSTELLATION_BASE_URL>/api/agent/manifest`.
+
 ## Credits
 
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) by [Nous Research](https://nousresearch.com/)

@@ -159,6 +159,11 @@ def read_env(path: Path) -> dict[str, str]:
 
 GBRAIN_BIN = "/data/.bun/bin/gbrain"
 
+# Constellation MCP server — Python single-file MCP wrapper around the user's
+# Constellation API (YouTube-insight library). Lives inside the Docker image,
+# spawned by hermes as a subprocess when the two env vars below are set.
+CONSTELLATION_MCP_SCRIPT = "/app/constellation_mcp.py"
+
 # Cross-prefix env vars that GBrain reads at runtime but which don't carry
 # our GENUI_/GBRAIN_ namespace. Forwarded explicitly when set on Hermes's
 # process env; missing/empty values are silently skipped (so the no-op
@@ -240,6 +245,50 @@ def _build_gbrain_mcp_entry() -> dict | None:
     }
 
 
+def _build_constellation_mcp_entry() -> dict | None:
+    """Construct the Constellation stdio MCP server entry for config.yaml,
+    or None if Constellation isn't configured.
+
+    Constellation is the user's read-only YouTube-insight API. We wrap it as
+    a stdio MCP server so the LLM gets typed tools (`constellation_search`,
+    `constellation_library`, …) without the system prompt having to inline
+    the entire API reference on every turn.
+
+    The MCP server only boots when BOTH env vars are present:
+      - CONSTELLATION_BASE_URL   the deployed API root (no trailing slash)
+      - CONSTELLATION_API_TOKEN  the AGENT_API_TOKEN secret
+
+    Forwarding is namespace-scoped — every CONSTELLATION_* env var with a
+    non-empty value is forwarded to the subprocess. No cross-prefix
+    allowlist is needed because the MCP server is self-contained (only
+    httpx + stdlib; no DB, no LLM provider keys to plumb through).
+
+    Mirror of _build_gbrain_mcp_entry above. Same timeout posture; the
+    Constellation API is read-only and HTTP-fast, so 60s is plenty.
+    """
+    base_url = os.environ.get("CONSTELLATION_BASE_URL", "").strip()
+    token = os.environ.get("CONSTELLATION_API_TOKEN", "").strip()
+    if not base_url or not token:
+        return None
+    if not Path(CONSTELLATION_MCP_SCRIPT).exists():
+        return None
+
+    forwarded_env: dict[str, str] = {}
+    for k, v in os.environ.items():
+        if k.startswith("CONSTELLATION_") and v:
+            forwarded_env[k] = v
+
+    return {
+        # python3 is the entrypoint of the image's base layer
+        # (ghcr.io/astral-sh/uv:python3.12-bookworm-slim) — always present.
+        "command": "python3",
+        "args": [CONSTELLATION_MCP_SCRIPT],
+        "env": forwarded_env,
+        "timeout": 60,
+        "connect_timeout": 30,
+    }
+
+
 def write_config_yaml(data: dict[str, str]) -> None:
     """Read-merge-write /data/.hermes/config.yaml.
 
@@ -272,8 +321,8 @@ def write_config_yaml(data: dict[str, str]) -> None:
     existing["data_dir"] = HERMES_HOME
 
     # mcp_servers: preserve other entries the user may have added; only
-    # touch the `gbrain` slot. If GBrain isn't enabled/installed, drop
-    # the slot so a stale entry doesn't try to spawn a missing binary.
+    # touch the slots we manage. If a managed server isn't enabled/installed,
+    # drop its slot so a stale entry doesn't try to spawn a missing binary.
     mcp_servers = existing.get("mcp_servers")
     if not isinstance(mcp_servers, dict):
         mcp_servers = {}
@@ -290,6 +339,24 @@ def write_config_yaml(data: dict[str, str]) -> None:
             f"skipped (GBRAIN_ENABLED={os.environ.get('GBRAIN_ENABLED','unset')}, "
             f"binary_present={Path(GBRAIN_BIN).exists()})"
         )
+
+    constellation_entry = _build_constellation_mcp_entry()
+    if constellation_entry is not None:
+        mcp_servers["constellation"] = constellation_entry
+        constellation_status = (
+            f"registered (env_forwarded={len(constellation_entry['env'])}, "
+            f"timeout={constellation_entry['timeout']}s)"
+        )
+    else:
+        mcp_servers.pop("constellation", None)
+        base_set = bool(os.environ.get("CONSTELLATION_BASE_URL", "").strip())
+        tok_set = bool(os.environ.get("CONSTELLATION_API_TOKEN", "").strip())
+        script_present = Path(CONSTELLATION_MCP_SCRIPT).exists()
+        constellation_status = (
+            f"skipped (base_url_set={base_set}, token_set={tok_set}, "
+            f"script_present={script_present})"
+        )
+
     if mcp_servers:
         existing["mcp_servers"] = mcp_servers
     else:
@@ -300,6 +367,7 @@ def write_config_yaml(data: dict[str, str]) -> None:
         encoding="utf-8",
     )
     print(f"[hermes-config] mcp_servers.gbrain: {gbrain_status}", flush=True)
+    print(f"[hermes-config] mcp_servers.constellation: {constellation_status}", flush=True)
 
 
 def write_env(path: Path, data: dict[str, str]) -> None:
