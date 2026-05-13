@@ -42,6 +42,10 @@ Subcommands:
   check    [path]    Run the 10-item skillify audit on a target path
                      (or --recent). Wraps the legacy scripts/skillify-check.ts
                      (D-CX-2: subcommand namespace).
+  distill            Propose ONE curation decision (insert | update | merge
+                     | delete | nothing) against the current skill library,
+                     given a task description + the friction log. Opt-in,
+                     advisory; never writes to skills/. Requires a chat model.
 
 Run \`gbrain skillify <subcommand> --help\` for per-subcommand options.
 `;
@@ -59,6 +63,13 @@ export async function runSkillify(args: string[]): Promise<void> {
   }
   if (sub === 'check') {
     await runSkillifyCheck(rest);
+    return;
+  }
+  if (sub === 'distill') {
+    // Late-import so the chat-gateway + friction modules don't pay their
+    // load cost for `scaffold` / `check` runs that don't need them.
+    const { runSkillifyDistill } = await import('./skillify-distill.ts');
+    await runSkillifyDistill(rest);
     return;
   }
   console.error(`Unknown subcommand: ${sub}\n`);

@@ -71,6 +71,34 @@ export function skillMdTemplate(v: ScaffoldVars): string {
     `Run the deterministic script: \`bun scripts/${v.name}.mjs\` (or whatever your harness prefix is).`,
   );
   lines.push('');
+  // Experience-distillation sections. These three are what separate a
+  // procedure-as-script from a procedure-as-skill: the executor needs to
+  // know NOT just what to do but when to skip, what tends to break, and
+  // how to recover. Each section's stub carries SKILLIFY_STUB_MARKER so
+  // `check-resolvable --strict` flags unfilled scaffolds the same way it
+  // flags an unimplemented script. The conformance test in
+  // test/skills-conformance.test.ts asserts the section headers exist.
+  lines.push('## When NOT to Use');
+  lines.push('');
+  lines.push(`<!-- ${SKILLIFY_STUB_MARKER} -->`);
+  lines.push(
+    'List the cases where this skill is the wrong tool. Be specific: which adjacent skill or which alternative path should run instead. A skill without explicit non-use conditions tends to get applied everywhere and erodes trust in the resolver.',
+  );
+  lines.push('');
+  lines.push('## Common Failure Modes');
+  lines.push('');
+  lines.push(`<!-- ${SKILLIFY_STUB_MARKER} -->`);
+  lines.push(
+    'Catalog the failures the implementer should expect: bad inputs, brittle assumptions, integration edges. Cite at least one real incident the skill exists to prevent (the regression case in the test file should map 1:1 to an entry here).',
+  );
+  lines.push('');
+  lines.push('## Recovery Strategy');
+  lines.push('');
+  lines.push(`<!-- ${SKILLIFY_STUB_MARKER} -->`);
+  lines.push(
+    'When the normal workflow fails, describe the rollback or alternate path. If recovery requires manual intervention, state which artifact (log file, audit trail, brain page) the next agent should consult.',
+  );
+  lines.push('');
   // 11-item contract (T7=C in plans/radiant-napping-lerdorf.md): the new
   // Phase 3 cross-modal eval is informational. The scaffold tells the
   // implementer where the gate lives without forcing it as a blocker.

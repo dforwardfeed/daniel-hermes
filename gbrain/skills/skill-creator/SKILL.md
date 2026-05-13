@@ -58,8 +58,24 @@ mutating: {true|false}
 ## Output Format
 {What good output looks like}
 
+## When NOT to Use
+{Specific cases where this skill is the wrong tool. Name the adjacent skill
+or alternative path that should run instead. A skill without explicit
+non-use conditions tends to get applied everywhere.}
+
+## Common Failure Modes
+{Failures the implementer should expect: bad inputs, brittle assumptions,
+integration edges. Cite at least one real incident the skill exists to
+prevent — the regression test should map 1:1 to an entry here.}
+
+## Recovery Strategy
+{When the normal workflow fails, the rollback or alternate path. If recovery
+requires manual intervention, name the artifact the next agent should consult
+(log file, audit trail, brain page).}
+
 ## Anti-Patterns
-{What NOT to do — 3-5 items}
+{What NOT to do — 3-5 items. Distinct from "When NOT to Use": this is
+about mistakes inside the skill, not about choosing the wrong skill.}
 
 ## Tools Used
 {GBrain operations used, with descriptions}
@@ -73,6 +89,28 @@ mutating: {true|false}
 
 New `skills/{name}/SKILL.md` file + updated manifest + updated resolver.
 
+## When NOT to Use
+
+- The capability is already covered by an existing skill — extend it instead
+- The task is a one-off (write a TODO entry or commit comment instead)
+- The "skill" would just wrap a single CLI command with no judgment layer
+
+## Common Failure Modes
+
+- Two skills declaring the same trigger — RESOLVER.md routing becomes ambiguous
+- A skill marked `writes_pages: true` whose `writes_to:` directories aren't
+  in `_brain-filing-rules.json` (filing-audit Check 6 will fail)
+- Scaffolded SKILLIFY_STUB markers left in committed scripts
+  (check-resolvable --strict will fail)
+
+## Recovery Strategy
+
+If conformance fails after creation: run `gbrain skillpack-check --json` to
+get the precise failure list, then resolve each issue (replace stubs, align
+triggers, update manifest) before committing. If MECE overlap surfaces
+post-merge, the right move is usually MERGE the two skills rather than
+delete the new one — overlapping triggers are the symptom.
+
 ## Anti-Patterns
 
 - Creating a skill that overlaps with an existing one (violates MECE)
@@ -80,3 +118,5 @@ New `skills/{name}/SKILL.md` file + updated manifest + updated resolver.
 - Creating a skill without triggers in frontmatter
 - Not updating manifest.json and RESOLVER.md
 - Creating a skill without an Anti-Patterns section
+- Shipping a SKILL.md without When-NOT / Failure-Modes / Recovery sections —
+  the conformance ratchet will warn now and fail later
