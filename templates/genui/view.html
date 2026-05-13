@@ -24,6 +24,8 @@
       {% for v in (topbar_views or []) if v.slug != view.slug %}
         <a class="btn btn--sm" href="/ui/view/{{ v.slug }}" title="View: {{ v.name }}">{{ v.name }}</a>
       {% endfor %}
+      <a class="btn btn--sm" href="/api/ui/views/{{ view.slug }}/export.md"
+         title="Download as markdown" download="{{ view.slug }}.md">Export</a>
       <button class="btn btn--sm btn--danger" id="view-delete-btn"
               data-slug="{{ view.slug }}">Delete view</button>
     </div>
@@ -58,9 +60,23 @@
                        aria-label="Mark done"
                        data-item-id="{{ item.id }}">
                 <div class="checklist__body">
-                  <span class="checklist__text">{{ item.text }}</span>
-                  <span class="checklist__when">added {{ item.createdAt[:10] }}</span>
+                  <span class="checklist__text" data-item-id="{{ item.id }}">{{ item.text }}</span>
+                  <span class="checklist__when">
+                    added {{ item.createdAt[:10] }}
+                    {% if item.dueAt %}
+                      <span class="checklist__due
+                        {%- if item._due_status == 'overdue' %} checklist__due--overdue
+                        {%- elif item._due_status == 'today' %} checklist__due--today
+                        {%- else %} checklist__due--upcoming{% endif %}">
+                        {% if item._due_status == 'overdue' %}overdue ·{% elif item._due_status == 'today' %}today{% else %}due{% endif %}
+                        {{ item.dueAt[:10] }}
+                      </span>
+                    {% endif %}
+                  </span>
                 </div>
+                <button class="checklist__edit" type="button"
+                        title="Edit text" aria-label="Edit item"
+                        data-item-id="{{ item.id }}">✎</button>
                 <button class="checklist__remove" type="button"
                         title="Remove" aria-label="Remove item"
                         data-item-id="{{ item.id }}">×</button>
@@ -79,9 +95,12 @@
                        checked
                        data-item-id="{{ item.id }}">
                 <div class="checklist__body">
-                  <span class="checklist__text">{{ item.text }}</span>
+                  <span class="checklist__text" data-item-id="{{ item.id }}">{{ item.text }}</span>
                   <span class="checklist__when">done {{ (item.doneAt or item.createdAt)[:10] }}</span>
                 </div>
+                <button class="checklist__edit" type="button"
+                        title="Edit text" aria-label="Edit item"
+                        data-item-id="{{ item.id }}">✎</button>
                 <button class="checklist__remove" type="button"
                         title="Remove" aria-label="Remove item"
                         data-item-id="{{ item.id }}">×</button>
@@ -97,6 +116,15 @@
     </div>
   </div>
 </main>
+
+<script>
+/* Hint for the floating compose partial — pre-select this view when the
+   user opens the quick-add panel from this page. Set before the compose
+   include so the include's IIFE picks it up on its first run. */
+window.__composeDefaultSlug = {{ view.slug|tojson }};
+</script>
+
+{% include "genui/_compose.html" %}
 
 <script>
 (function () {
@@ -195,6 +223,55 @@
         alert('Remove failed: ' + e);
         btn.disabled = false;
       }
+    });
+  });
+
+  /* Inline edit. Click ✎ → text becomes an <input> → Enter saves, Esc
+     cancels. Saves via PATCH /items/<id> with {text}. On success, reload
+     so the server-side sort (overdue first) applies. */
+  document.querySelectorAll('.checklist__edit').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var itemId = btn.getAttribute('data-item-id');
+      var textEl = document.querySelector(
+        '.checklist__text[data-item-id="' + itemId + '"]'
+      );
+      if (!textEl || textEl.querySelector('.checklist__edit-input')) return;
+      var original = textEl.textContent.trim();
+      var input = document.createElement('input');
+      input.className = 'checklist__edit-input';
+      input.value = original;
+      input.maxLength = 2000;
+      textEl.innerHTML = '';
+      textEl.appendChild(input);
+      input.focus();
+      input.setSelectionRange(0, input.value.length);
+
+      function cancel() {
+        textEl.textContent = original;
+      }
+      async function save() {
+        var next = (input.value || '').trim();
+        if (!next || next === original) { cancel(); return; }
+        input.disabled = true;
+        try {
+          var r = await api('PATCH', '/items/' + encodeURIComponent(itemId), { text: next });
+          if (r.ok) {
+            window.location.reload();
+          } else {
+            var err = await r.json().catch(function () { return {}; });
+            alert('Edit failed: ' + (err.error || r.status));
+            cancel();
+          }
+        } catch (e) {
+          alert('Edit failed: ' + e);
+          cancel();
+        }
+      }
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); save(); }
+        else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+      });
+      input.addEventListener('blur', save);
     });
   });
 

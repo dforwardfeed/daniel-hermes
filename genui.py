@@ -131,6 +131,48 @@ VIEW_ITEMS_MAX = 1000      # hard cap per view; defensive against bloat
 VIEW_NAV_MAX = 12          # max custom views surfaced in the topbar nav
 
 
+# Built-in scaffolds the agent can request via {template: "<name>"} on
+# view-create. Each scaffold is a small starter — pre-seeded items as
+# conversation prompts, or just a description. Keep this list short and
+# opinionated; the goal is "save the user three minutes of typing," not
+# "build a template marketplace."
+VIEW_SCAFFOLDS: dict[str, dict] = {
+    "daily-plan": {
+        "description": "Today's plan — three short answers.",
+        "items": [
+            {"text": "What I'll do today"},
+            {"text": "What I'll skip today"},
+            {"text": "What I want to remember by tonight"},
+        ],
+    },
+    "weekly-review": {
+        "description": "End-of-week reflection. Fill it in Friday afternoon.",
+        "items": [
+            {"text": "What worked this week"},
+            {"text": "What didn't work"},
+            {"text": "One theme I noticed"},
+            {"text": "Next week's top priority"},
+        ],
+    },
+    "decision-log": {
+        "description": "Decisions worth remembering. One per row.",
+        "items": [
+            {"text": "Decision I made"},
+            {"text": "Why I made it"},
+            {"text": "What would change my mind"},
+        ],
+    },
+    "reading-list": {
+        "description": "Articles, papers, books to read. Add a link in the note.",
+        "items": [],
+    },
+    "groceries": {
+        "description": "Things to buy.",
+        "items": [],
+    },
+}
+
+
 # ── Storage helpers ───────────────────────────────────────────────────────────
 def _ensure_dirs() -> None:
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -225,7 +267,11 @@ def _validate_view_create(body: dict) -> tuple[dict, list[str]]:
     """Validate a POST /api/ui/views body. Returns (view, errors).
     On success, view is the persistable record with id, timestamps, and
     a normalized items list (callers can pass items at create time so a
-    view can be seeded in one call)."""
+    view can be seeded in one call).
+
+    A `template` field, if present, resolves against VIEW_SCAFFOLDS and
+    seeds description + items. Callers can override either by passing the
+    explicit field — explicit values win over the scaffold."""
     errs: list[str] = []
     if not isinstance(body, dict):
         return ({}, ["body must be a JSON object"])
@@ -244,7 +290,21 @@ def _validate_view_create(body: dict) -> tuple[dict, list[str]]:
     if slug in VIEW_SLUG_RESERVED:
         errs.append(f"slug `{slug}` is reserved; pick another")
 
-    description = body.get("description", "") or ""
+    # Resolve template scaffold BEFORE reading description/items so explicit
+    # values override the scaffold defaults.
+    scaffold: dict = {}
+    template = body.get("template")
+    if isinstance(template, str) and template:
+        scaffold = VIEW_SCAFFOLDS.get(template, {})
+        if not scaffold:
+            errs.append(
+                f"template '{template}' unknown; choose from "
+                f"{sorted(VIEW_SCAFFOLDS.keys())}"
+            )
+
+    description = body.get("description")
+    if description is None:
+        description = scaffold.get("description", "")
     if not isinstance(description, str):
         errs.append("description must be a string")
         description = ""
@@ -257,7 +317,11 @@ def _validate_view_create(body: dict) -> tuple[dict, list[str]]:
         # fall through and render as checklists.
         errs.append("kind must be 'checklist' (only kind supported in MVP)")
 
-    raw_items = body.get("items") or []
+    # Items: explicit `items` overrides the scaffold's seed; pass [] to
+    # create an empty view even when the scaffold seeds rows.
+    raw_items = body.get("items")
+    if raw_items is None:
+        raw_items = list(scaffold.get("items", []))
     if not isinstance(raw_items, list):
         errs.append("items must be an array")
         raw_items = []
@@ -284,13 +348,55 @@ def _validate_view_create(body: dict) -> tuple[dict, list[str]]:
         "createdAt": now,
         "updatedAt": now,
     }
+    if isinstance(template, str) and template:
+        # Stamp which scaffold seeded the view — useful for later analytics
+        # and for showing the user "this view was created from a template."
+        view["template"] = template
     return (view, [])
+
+
+# ── Due-date validation ──────────────────────────────────────────────────────
+# Accepts:
+#   - ISO date     (2026-05-20)
+#   - ISO datetime (2026-05-20T14:30:00Z, with or without timezone)
+#   - "" or None to clear
+# Normalizes to a stable string; the UI does the relative formatting.
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_DATETIME_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$"
+)
+
+
+def _normalize_due(value: object) -> tuple[str | None, str | None]:
+    """Returns (normalized, error). normalized is the stored value or None
+    to clear. error is None on success."""
+    if value is None or value == "":
+        return (None, None)
+    if not isinstance(value, str):
+        return (None, "dueAt must be an ISO date/datetime string or null")
+    v = value.strip()
+    if _DATE_RE.match(v):
+        # Confirm the date is real (rejects 2026-02-30, 2026-13-01, etc.).
+        try:
+            datetime.strptime(v, "%Y-%m-%d")
+        except ValueError:
+            return (None, f"dueAt '{v}' is not a real date")
+        return (v, None)
+    if _DATETIME_RE.match(v):
+        # Defensive parse — Python 3.11+ fromisoformat handles most ISO
+        # variants but not bare 'Z'. Normalize 'Z' to '+00:00' for parse.
+        try:
+            datetime.fromisoformat(v.replace("Z", "+00:00"))
+        except ValueError:
+            return (None, f"dueAt '{v}' is not a valid ISO datetime")
+        return (v, None)
+    return (None, "dueAt must be 'YYYY-MM-DD' or a full ISO datetime")
 
 
 def _validate_item_input(raw: object) -> tuple[dict, list[str]]:
     """Validate an item body for create OR full-replace. Items are
-    {id?, text, done?, created_at?, done_at?, note?}. Server fills missing
-    id + timestamps. Returns (item, errors)."""
+    {id?, text, done?, createdAt?, doneAt?, note?, dueAt?}. Server fills
+    missing id + timestamps. Returns (item, errors)."""
     errs: list[str] = []
     if not isinstance(raw, dict):
         return ({}, ["must be an object"])
@@ -307,6 +413,11 @@ def _validate_item_input(raw: object) -> tuple[dict, list[str]]:
     if note is not None and not isinstance(note, str):
         errs.append("note must be a string when provided")
         note = None
+    due_norm: str | None = None
+    if "dueAt" in raw:
+        due_norm, due_err = _normalize_due(raw.get("dueAt"))
+        if due_err:
+            errs.append(due_err)
     if errs:
         return ({}, errs)
 
@@ -326,6 +437,8 @@ def _validate_item_input(raw: object) -> tuple[dict, list[str]]:
         item["doneAt"] = now
     if note:
         item["note"] = note.strip()
+    if due_norm:
+        item["dueAt"] = due_norm
     return (item, [])
 
 
@@ -1602,6 +1715,15 @@ async def api_view_item_update(request: Request) -> Response:
             current["note"] = new_note.strip()
         else:
             errs.append("note must be a string or null")
+    if "dueAt" in body:
+        # `dueAt: null` or `""` clears the field; anything else parses.
+        norm, due_err = _normalize_due(body["dueAt"])
+        if due_err:
+            errs.append(due_err)
+        elif norm is None:
+            current.pop("dueAt", None)
+        else:
+            current["dueAt"] = norm
     if errs:
         return JSONResponse({"error": "validation failed", "details": errs}, status_code=400)
 
@@ -1612,6 +1734,66 @@ async def api_view_item_update(request: Request) -> Response:
     except OSError:
         return JSONResponse({"error": "failed to persist view"}, status_code=500)
     return JSONResponse({"ok": True, "item": current})
+
+
+# ── View export: plain markdown ──────────────────────────────────────────────
+def _format_view_markdown(view: dict) -> str:
+    """Render a view as plain-text markdown. Mirrors how a human would type
+    a checklist by hand: title, optional description, open items first,
+    done items second under their own subheading. Due dates render as a
+    parenthetical suffix; agents reading the export back can reconstruct
+    the state losslessly."""
+    items = view.get("items") or []
+    open_items = [it for it in items if not it.get("done")]
+    done_items = [it for it in items if it.get("done")]
+    lines: list[str] = []
+    lines.append(f"# {view.get('name', view.get('slug', 'View'))}")
+    lines.append("")
+    desc = view.get("description") or ""
+    if desc.strip():
+        lines.append(desc.strip())
+        lines.append("")
+    if open_items:
+        lines.append("## Open")
+        lines.append("")
+        for it in open_items:
+            lines.append("- [ ] " + _format_item_line(it))
+        lines.append("")
+    if done_items:
+        lines.append("## Done")
+        lines.append("")
+        for it in done_items:
+            lines.append("- [x] " + _format_item_line(it))
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _format_item_line(item: dict) -> str:
+    parts = [str(item.get("text", "")).strip() or "(no text)"]
+    if item.get("dueAt"):
+        parts.append(f"(due {item['dueAt'][:10]})")
+    if item.get("note"):
+        parts.append(f"— _{item['note'].strip()}_")
+    return " ".join(parts)
+
+
+async def api_view_export_markdown(request: Request) -> Response:
+    """GET /api/ui/views/{slug}/export.md — returns the view as text/markdown."""
+    if not GENUI_ENABLED:
+        return _disabled()
+    if err := _api_guard(request):
+        return err
+    view = _load_view(request.path_params["slug"])
+    if view is None:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    body = _format_view_markdown(view)
+    headers = {
+        "Content-Type": "text/markdown; charset=utf-8",
+        # Suggest a filename for browser downloads. The user can rename
+        # but this is a sane default.
+        "Content-Disposition": f'inline; filename="{view["slug"]}.md"',
+    }
+    return Response(body, headers=headers)
 
 
 async def api_view_item_delete(request: Request) -> Response:
@@ -2340,8 +2522,40 @@ async def page_view(request: Request) -> Response:
     items = view.get("items") or []
     open_items = [it for it in items if not it.get("done")]
     done_items = [it for it in items if it.get("done")]
-    # Newest first for both — feels natural in a checklist.
-    open_items.sort(key=lambda it: it.get("createdAt", ""), reverse=True)
+    # Stamp each open item with a due-status the template can branch on.
+    # Sort: overdue first (oldest-overdue at the very top), then by due-date
+    # ascending, then undated newest-first. The intent: when the user opens
+    # the view, the top row is always the thing that should be done now.
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    for it in open_items:
+        due = it.get("dueAt") or ""
+        if not due:
+            it["_due_status"] = "none"
+            it["_due_sort"] = (3, "")  # third bucket; undated
+        else:
+            due_date = due[:10]
+            if due_date < today:
+                it["_due_status"] = "overdue"
+                it["_due_sort"] = (0, due_date)
+            elif due_date == today:
+                it["_due_status"] = "today"
+                it["_due_sort"] = (1, due_date)
+            else:
+                it["_due_status"] = "upcoming"
+                it["_due_sort"] = (2, due_date)
+    open_items.sort(
+        key=lambda it: (
+            it.get("_due_sort", (3, "")),
+            # Within an undated bucket, newest first.
+            "" if it.get("dueAt") else (it.get("createdAt") or ""),
+        ),
+        reverse=False,
+    )
+    # Newest-first inside the undated bucket — sort there is reversed.
+    undated_open = [it for it in open_items if not it.get("dueAt")]
+    dated_open = [it for it in open_items if it.get("dueAt")]
+    undated_open.sort(key=lambda it: it.get("createdAt", ""), reverse=True)
+    open_items = dated_open + undated_open
     done_items.sort(key=lambda it: it.get("doneAt") or it.get("createdAt", ""), reverse=True)
 
     assert _templates is not None
@@ -2420,6 +2634,9 @@ def get_routes(
         Route("/api/ui/views/{slug}/items", api_view_item_create, methods=["POST"]),
         Route("/api/ui/views/{slug}/items/{item_id}", api_view_item_update, methods=["PATCH"]),
         Route("/api/ui/views/{slug}/items/{item_id}", api_view_item_delete, methods=["DELETE"]),
+        # Markdown export — uses a literal `export.md` segment so the
+        # browser sees a sensible filename on save.
+        Route("/api/ui/views/{slug}/export.md", api_view_export_markdown, methods=["GET"]),
         # Artifact + standalone pages.
         Route("/ui/latest/{id}", page_latest, methods=["GET"]),
         Route("/ui/saved", page_saved_index, methods=["GET"]),

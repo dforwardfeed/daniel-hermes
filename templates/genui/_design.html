@@ -1085,6 +1085,189 @@
   .add-item__input:focus { border-color: var(--accent); outline: none; }
   .add-item__input::placeholder { color: var(--text-tertiary); }
 
+  /* ─── Due-date chip on checklist items ───────────────────────────── */
+  .checklist__due {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: var(--fw-medium);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 1px 8px;
+    margin-left: var(--space-2);
+    border-radius: var(--radius-full);
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-overlay);
+    color: var(--text-tertiary);
+    flex: 0 0 auto;
+    vertical-align: middle;
+  }
+  .checklist__due--overdue {
+    color: var(--danger);
+    background: var(--danger-subtle);
+    border-color: rgba(239, 111, 108, 0.30);
+  }
+  .checklist__due--today {
+    color: var(--warning);
+    background: var(--warning-subtle);
+    border-color: rgba(245, 180, 97, 0.30);
+  }
+  .checklist__due--upcoming {
+    color: var(--text-secondary);
+  }
+
+  /* ─── Inline edit affordance on checklist items ──────────────────── */
+  .checklist__edit {
+    flex: 0 0 auto;
+    width: 28px; height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-tertiary);
+    border-radius: var(--radius-md);
+    font-size: 14px;
+    opacity: 0;
+    transition: opacity var(--dur-fast) var(--ease),
+                color var(--dur-fast) var(--ease),
+                background var(--dur-fast) var(--ease);
+  }
+  .checklist__item:hover .checklist__edit { opacity: 1; }
+  .checklist__edit:hover {
+    color: var(--accent);
+    background: var(--accent-subtle);
+  }
+  /* When item is in edit mode the static text is hidden, an input takes
+     its place. Server-driven reload keeps things simple. */
+  .checklist__edit-input {
+    width: 100%;
+    background: var(--bg-app);
+    color: var(--text-primary);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-md);
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--fs-base);
+    font-family: inherit;
+    outline: none;
+  }
+
+  /* ─── Floating compose (FAB + popup panel) ───────────────────────── */
+  /* Sits bottom-right on every GenUI page. Click → small popup with a
+     view-selector and a one-line input. Submits to the existing item-
+     create endpoint. Designed to feel like Linear's quick-add, not a
+     full modal — under 280px wide, no scroll, no nested forms. */
+  .compose-fab {
+    position: fixed;
+    bottom: var(--space-5);
+    right: var(--space-5);
+    z-index: 60;
+    width: 48px;
+    height: 48px;
+    border-radius: var(--radius-full);
+    background: var(--accent);
+    color: var(--accent-fg);
+    border: 1px solid var(--accent);
+    box-shadow: var(--shadow-lg);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    line-height: 1;
+    font-weight: var(--fw-medium);
+    cursor: pointer;
+    transition: transform var(--dur-fast) var(--ease),
+                background var(--dur-fast) var(--ease);
+  }
+  .compose-fab:hover {
+    background: var(--accent-hover);
+    transform: translateY(-2px);
+  }
+  .compose-fab:active { transform: translateY(0); }
+  .compose-fab[hidden] { display: none !important; }
+
+  .compose-panel {
+    position: fixed;
+    bottom: calc(var(--space-5) + 56px);
+    right: var(--space-5);
+    z-index: 61;
+    width: 320px;
+    max-width: calc(100vw - var(--space-5) * 2);
+    background: var(--bg-raised);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    padding: var(--space-4);
+    display: none;
+  }
+  .compose-panel[data-open="true"] { display: block; }
+  .compose-panel__title {
+    font-size: var(--fs-xs);
+    font-family: var(--font-mono);
+    font-weight: var(--fw-medium);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+    margin-bottom: var(--space-2);
+  }
+  .compose-panel__row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .compose-panel__select,
+  .compose-panel__input {
+    width: 100%;
+    background: var(--bg-app);
+    color: var(--text-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--fs-base);
+    font-family: inherit;
+    transition: border-color var(--dur-fast) var(--ease);
+  }
+  .compose-panel__select:focus,
+  .compose-panel__input:focus { border-color: var(--accent); outline: none; }
+  .compose-panel__input::placeholder { color: var(--text-tertiary); }
+  .compose-panel__hint {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    margin-top: var(--space-1);
+  }
+  .compose-panel__actions {
+    display: flex;
+    gap: var(--space-2);
+    justify-content: flex-end;
+    margin-top: var(--space-2);
+  }
+  .compose-panel__empty {
+    color: var(--text-tertiary);
+    font-size: var(--fs-sm);
+    text-align: center;
+    padding: var(--space-3) 0;
+  }
+  .compose-toast {
+    position: fixed;
+    bottom: calc(var(--space-5) + 64px);
+    right: var(--space-5);
+    z-index: 62;
+    background: var(--bg-overlay);
+    color: var(--text-primary);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    padding: var(--space-2) var(--space-4);
+    font-size: var(--fs-sm);
+    box-shadow: var(--shadow-md);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--dur-base) var(--ease);
+  }
+  .compose-toast[data-visible="true"] {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
   /* ─── Segmented control (tabs) ────────────────────────────────────── */
   .seg {
     display: inline-flex;

@@ -143,6 +143,17 @@ TOOLS: list[dict[str, Any]] = [
             "you don't pass one, the server slugifies the name for you "
             "(e.g. name='Reading List' → slug='reading-list'). Returns "
             "the resolved slug and the canonical view URL."
+            " "
+            "The optional `template` argument seeds the view from a "
+            "built-in scaffold. Use it when the user asks for a common "
+            "shape ('daily plan', 'weekly review', 'decision log'). "
+            "Available templates: 'daily-plan' (3 reflection prompts for "
+            "today), 'weekly-review' (4 prompts for end-of-week), "
+            "'decision-log' (3 prompts capturing one decision), "
+            "'reading-list' (empty, with description), 'groceries' "
+            "(empty, with description). Passing an explicit `items` array "
+            "overrides the scaffold's seed items; passing `description` "
+            "overrides the scaffold's description."
         ),
         "inputSchema": {
             "type": "object",
@@ -157,12 +168,16 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "description": {
                     "type": "string",
-                    "description": "Optional one-line description rendered under the view's title (<= 500 chars).",
+                    "description": "Optional one-line description rendered under the view's title (<= 500 chars). Overrides the template's description if a template is named.",
+                },
+                "template": {
+                    "type": "string",
+                    "description": "Optional starter scaffold to pre-seed description + items. One of: 'daily-plan', 'weekly-review', 'decision-log', 'reading-list', 'groceries'. Omit for an empty view.",
                 },
                 "items": {
                     "type": "array",
                     "items": {"type": "object"},
-                    "description": "Optional initial items to seed the view with. Each item: {text: string, done?: boolean, note?: string}. Useful when creating a view from a list the user just dictated.",
+                    "description": "Optional initial items to seed the view with. Each item: {text: string, done?: boolean, note?: string, dueAt?: string (ISO date)}. Useful when creating a view from a list the user just dictated. Overrides any template seed.",
                 },
             },
             "required": ["name"],
@@ -273,6 +288,93 @@ TOOLS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "genui_edit_item",
+        "description": (
+            "Edit the text or note of an existing item. Use this for "
+            "typo fixes, rewording, or adding/changing the sub-note. "
+            "Pass `text` to replace the main line, `note` to set/replace "
+            "the sub-note, or `note: \"\"` to clear the note. At least "
+            "one of `text` or `note` must be provided."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "slug": {
+                    "type": "string",
+                    "description": "The view's slug.",
+                },
+                "item_id": {
+                    "type": "string",
+                    "description": "The item's id (`i_…`).",
+                },
+                "text": {
+                    "type": "string",
+                    "description": "Replacement text (<= 2000 chars). Omit to leave text unchanged.",
+                },
+                "note": {
+                    "type": "string",
+                    "description": "Replacement sub-note (<= 2000 chars). Pass an empty string to clear an existing note. Omit to leave the note unchanged.",
+                },
+            },
+            "required": ["slug", "item_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "genui_set_due",
+        "description": (
+            "Set or clear an item's due date. Overdue items float to "
+            "the top of the view and render with a red 'overdue' chip; "
+            "items due today get an amber chip; future-dated items get "
+            "a muted chip. Use this when the user mentions a deadline "
+            "('due tomorrow', 'by Friday', 'next week'). YOU must "
+            "resolve relative phrases to an absolute ISO date — the "
+            "tool only accepts 'YYYY-MM-DD' or full ISO datetime. Pass "
+            "an empty string to clear an existing due date."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "slug": {
+                    "type": "string",
+                    "description": "The view's slug.",
+                },
+                "item_id": {
+                    "type": "string",
+                    "description": "The item's id (`i_…`).",
+                },
+                "due_date": {
+                    "type": "string",
+                    "description": "ISO date 'YYYY-MM-DD' (e.g. '2026-05-20') or full ISO datetime. Pass an empty string to clear the due date. The agent must convert natural-language dates ('tomorrow', 'Friday') to ISO before calling.",
+                },
+            },
+            "required": ["slug", "item_id", "due_date"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "genui_export_markdown",
+        "description": (
+            "Export a view as plain markdown — title, description, open "
+            "and done items as `- [ ]` / `- [x]` checkboxes. Use this "
+            "when the user asks to copy the list, share it, or hand it "
+            "off to another tool (gbrain page, GitHub issue, email). "
+            "Returns the markdown body as a single string; format it for "
+            "the chat or just paste it back verbatim."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "slug": {
+                    "type": "string",
+                    "description": "The view's slug to export.",
+                },
+            },
+            "required": ["slug"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -296,6 +398,8 @@ def call_tool(name: str, arguments: dict) -> dict:
             body["slug"] = a["slug"].strip()
         if isinstance(a.get("description"), str):
             body["description"] = a["description"]
+        if isinstance(a.get("template"), str) and a["template"].strip():
+            body["template"] = a["template"].strip()
         if isinstance(a.get("items"), list):
             body["items"] = a["items"]
         return api_call("POST", "/api/ui/views", body)
@@ -338,6 +442,51 @@ def call_tool(name: str, arguments: dict) -> dict:
         if not isinstance(item_id, str) or not item_id.strip():
             raise ValueError("item_id (string) is required")
         return api_call("DELETE", f"/api/ui/views/{slug}/items/{item_id}")
+
+    if name == "genui_edit_item":
+        slug = a.get("slug")
+        item_id = a.get("item_id")
+        if not isinstance(slug, str) or not slug.strip():
+            raise ValueError("slug (string) is required")
+        if not isinstance(item_id, str) or not item_id.strip():
+            raise ValueError("item_id (string) is required")
+        body = {}
+        if isinstance(a.get("text"), str):
+            if not a["text"].strip():
+                raise ValueError("text must be a non-empty string when provided")
+            body["text"] = a["text"]
+        # `note` can be empty-string to clear; check key membership.
+        if "note" in a:
+            if not isinstance(a["note"], str):
+                raise ValueError("note must be a string (use '' to clear)")
+            body["note"] = a["note"]
+        if not body:
+            raise ValueError("at least one of `text` or `note` must be provided")
+        return api_call("PATCH", f"/api/ui/views/{slug}/items/{item_id}", body)
+
+    if name == "genui_set_due":
+        slug = a.get("slug")
+        item_id = a.get("item_id")
+        due = a.get("due_date")
+        if not isinstance(slug, str) or not slug.strip():
+            raise ValueError("slug (string) is required")
+        if not isinstance(item_id, str) or not item_id.strip():
+            raise ValueError("item_id (string) is required")
+        if not isinstance(due, str):
+            raise ValueError("due_date must be a string (ISO date or empty to clear)")
+        # Server validates ISO shape; we just relay.
+        return api_call("PATCH", f"/api/ui/views/{slug}/items/{item_id}", {"dueAt": due})
+
+    if name == "genui_export_markdown":
+        slug = a.get("slug")
+        if not isinstance(slug, str) or not slug.strip():
+            raise ValueError("slug (string) is required")
+        # Markdown export returns text/markdown, not JSON. Fetch raw and
+        # wrap in a JSON object so the tool result is uniform shape.
+        client = get_client()
+        resp = client.get(f"/api/ui/views/{slug}/export.md")
+        resp.raise_for_status()
+        return {"slug": slug, "markdown": resp.text}
 
     raise ValueError(f"Unknown tool: {name}")
 

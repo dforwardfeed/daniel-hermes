@@ -1,0 +1,163 @@
+{# Floating quick-add for view items. Included from every GenUI entry
+   template so the user can drop something into any view from any page
+   without navigating away. Cookie auth carries the request through to
+   /api/ui/views/<slug>/items. #}
+
+<button class="compose-fab" id="compose-fab" type="button"
+        title="Quick-add to a view (alt+A)" aria-label="Quick-add to a view"
+        hidden>+</button>
+
+<aside class="compose-panel" id="compose-panel" role="dialog"
+       aria-label="Quick-add an item">
+  <div class="compose-panel__title">Quick-add</div>
+  <div class="compose-panel__row" id="compose-rows">
+    <select class="compose-panel__select" id="compose-view" aria-label="Pick a view">
+      {# Server-rendered seed: avoids a fetch on initial open. The JS
+         refreshes on every open in case the user just created a view
+         in another tab. #}
+      {% for v in (topbar_views or []) %}
+        <option value="{{ v.slug }}">{{ v.name }}</option>
+      {% endfor %}
+    </select>
+    <input class="compose-panel__input" id="compose-text"
+           placeholder="What's the item?" maxlength="2000"
+           aria-label="Item text">
+    <div class="compose-panel__actions">
+      <button class="btn btn--sm" type="button" id="compose-cancel">Cancel</button>
+      <button class="btn btn--sm btn--primary" type="button" id="compose-add">Add</button>
+    </div>
+    <div class="compose-panel__hint">Enter to add · Esc to close</div>
+  </div>
+</aside>
+
+<div class="compose-toast" id="compose-toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  var fab    = document.getElementById('compose-fab');
+  var panel  = document.getElementById('compose-panel');
+  var select = document.getElementById('compose-view');
+  var input  = document.getElementById('compose-text');
+  var cancel = document.getElementById('compose-cancel');
+  var add    = document.getElementById('compose-add');
+  var toast  = document.getElementById('compose-toast');
+  var rows   = document.getElementById('compose-rows');
+
+  /* Show the FAB only if at least one view exists. Otherwise it's
+     useless and visually noisy. We seed from server-rendered options
+     but re-check on each open. */
+  function hasViews() { return select && select.options.length > 0; }
+  if (hasViews()) { fab.hidden = false; }
+
+  function open() {
+    /* Re-fetch the view list on open in case it changed elsewhere. */
+    fetch('/api/ui/views').then(function (r) {
+      return r.ok ? r.json() : { views: [] };
+    }).then(function (data) {
+      var views = (data && data.views) || [];
+      if (!views.length) {
+        fab.hidden = true;
+        showToast('No views yet. Ask Hermes to create one.');
+        return;
+      }
+      fab.hidden = false;
+      /* Preserve current selection if it still exists. */
+      var prev = select.value;
+      select.innerHTML = '';
+      views.forEach(function (v) {
+        var opt = document.createElement('option');
+        opt.value = v.slug;
+        opt.textContent = v.name;
+        select.appendChild(opt);
+      });
+      if (prev && views.some(function (v) { return v.slug === prev; })) {
+        select.value = prev;
+      } else if (window.__composeDefaultSlug) {
+        /* When on a view page, default to the current view. */
+        select.value = window.__composeDefaultSlug;
+      }
+      panel.setAttribute('data-open', 'true');
+      input.value = '';
+      input.focus();
+    }).catch(function () {
+      /* Network failure: still open the panel with whatever's seeded. */
+      panel.setAttribute('data-open', 'true');
+      input.focus();
+    });
+  }
+
+  function close() {
+    panel.removeAttribute('data-open');
+  }
+
+  function showToast(msg) {
+    toast.textContent = msg;
+    toast.setAttribute('data-visible', 'true');
+    setTimeout(function () { toast.removeAttribute('data-visible'); }, 2400);
+  }
+
+  async function submit() {
+    var slug = (select.value || '').trim();
+    var text = (input.value || '').trim();
+    if (!slug) { showToast('Pick a view first.'); return; }
+    if (!text) { input.focus(); return; }
+    add.disabled = true;
+    try {
+      var r = await fetch('/api/ui/views/' + encodeURIComponent(slug) + '/items', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: text }),
+      });
+      if (r.ok) {
+        showToast('Added to ' + slug);
+        input.value = '';
+        /* Stay open for rapid-fire entry. Esc / Cancel closes. If we're
+           currently viewing the same view, reload so the new item
+           appears in place. */
+        if (window.location.pathname === '/ui/view/' + slug) {
+          setTimeout(function () { window.location.reload(); }, 300);
+        }
+        input.focus();
+      } else {
+        var err = await r.json().catch(function () { return {}; });
+        showToast('Add failed: ' + (err.error || r.status));
+      }
+    } catch (e) {
+      showToast('Add failed: ' + e);
+    } finally {
+      add.disabled = false;
+    }
+  }
+
+  if (fab)    fab.addEventListener('click', open);
+  if (cancel) cancel.addEventListener('click', close);
+  if (add)    add.addEventListener('click', submit);
+
+  if (input) {
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); submit(); }
+      else if (e.key === 'Escape') { close(); }
+    });
+  }
+
+  /* Global keyboard shortcut: alt+a opens the compose, alt+v also works
+     (a = add). Don't interfere with browser shortcuts; alt-a is rarely
+     a default. */
+  document.addEventListener('keydown', function (e) {
+    if (e.altKey && (e.key === 'a' || e.key === 'A')) {
+      if (panel.getAttribute('data-open') === 'true') return;
+      if (!hasViews()) return;
+      e.preventDefault();
+      open();
+    }
+  });
+
+  /* Click-outside-to-close. Tracked at document level. */
+  document.addEventListener('click', function (e) {
+    if (panel.getAttribute('data-open') !== 'true') return;
+    var t = e.target;
+    if (panel.contains(t) || fab.contains(t)) return;
+    close();
+  });
+})();
+</script>

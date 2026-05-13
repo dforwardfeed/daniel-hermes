@@ -459,18 +459,27 @@ chat. Today's only kind is `checklist`: a to-do-style list with strikethrough,
 inline checkbox interactivity, and per-item add/remove. Each view appears at
 `/ui/view/<slug>` and shows up in the shared topbar nav across every page.
 
-The agent manages views via six MCP tools (auto-namespaced as
-`mcp_genui_*` once registered): `list_views`, `create_view`, `delete_view`,
-`add_item`, `mark_done`, `remove_item`. Activation requires only
-`GENUI_API_TOKEN` (already set for the artifact API) — the server registers
-the `genui` MCP entry automatically.
+The agent manages views via nine MCP tools (auto-namespaced as
+`mcp_genui_*` once registered): `list_views`, `create_view` (with optional
+`template` for built-in scaffolds), `delete_view`, `add_item`, `mark_done`,
+`remove_item`, `edit_item` (fix typos, change notes), `set_due` (deadline
+chips), `export_markdown` (copy the list out as plain markdown). Activation
+requires only `GENUI_API_TOKEN` (already set for the artifact API) — the
+server registers the `genui` MCP entry automatically.
 
 Try in Telegram:
 
 - *"Create a view called todo for my to-do list."*
-- *"Add 'call accountant' to my todo list."*
+- *"Create a daily-plan view for today."* — scaffold seeds three reflection prompts.
+- *"Add 'call accountant' to my todo, due Friday."* — agent resolves "Friday" to ISO before calling `mcp_genui_add_item` + `mcp_genui_set_due`. Overdue items float to the top with a red chip.
 - *"What's on my todo list?"*
+- *"Fix the typo in 'call accountnt' to 'call accountant'."* — `mcp_genui_edit_item`.
 - *"Mark 'call accountant' as done."*
+- *"Export my todo list as markdown so I can paste it into Slack."* — `mcp_genui_export_markdown`.
+
+**Browser quick-add:** every GenUI page (artifact view, Library, Daily, Views index, individual view) shows a floating `+` button in the bottom-right. Click it → pick a view → type the item → Enter. Keyboard shortcut `Alt+A`. Adds happen via the same `/api/ui/views/<slug>/items` endpoint the agent uses, so the agent sees the new item next time you ask.
+
+**Built-in view scaffolds** (pass `template` on create_view): `daily-plan` (3 reflection prompts), `weekly-review` (4 end-of-week questions), `decision-log` (3 prompts per decision), `reading-list` (empty with a description), `groceries` (empty with a description).
 
 Checkboxes on the rendered view are interactive — click in the browser to
 toggle done state; the agent and the UI share the same source of truth via
