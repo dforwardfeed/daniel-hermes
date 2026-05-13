@@ -8,14 +8,19 @@
   'success': 'green', 'completed': 'green', 'done': 'green',
   'failed': 'red', 'error': 'red', 'cancelled': 'gray',
 } %}
+{% set status_badge = {
+  'running': 'info', 'queued': 'neutral', 'pending': 'warning',
+  'success': 'success', 'completed': 'success', 'done': 'success',
+  'failed': 'danger', 'error': 'danger', 'cancelled': 'neutral',
+} %}
 
 {% if summary %}
-<div class="card"><p style="color:#c9d1d9">{{ summary }}</p></div>
+<section class="card"><p>{{ summary }}</p></section>
 {% endif %}
 
-<div class="card">
+<section class="card">
   {% if jobs %}
-  <table>
+  <table class="table">
     <thead>
       <tr>
         <th>Status</th>
@@ -31,14 +36,15 @@
       <tr>
         <td>
           <span class="status-dot {{ status_color.get(s, 'gray') }}"></span>
-          <span class="tag" style="margin:0">{{ s or 'unknown' }}</span>
+          <span class="badge badge--{{ status_badge.get(s, 'neutral') }}">{{ s or 'unknown' }}</span>
         </td>
-        <td><strong style="color:#f0f6fc">{{ j.name or j.id or 'Job' }}</strong>
-          {% if j.id %}<div class="muted" style="font-size:11px">{{ j.id }}</div>{% endif %}
+        <td>
+          <div class="strong">{{ j.name or j.id or 'Job' }}</div>
+          {% if j.id %}<div class="dim mono" style="font-size:11px;margin-top:2px">{{ j.id }}</div>{% endif %}
         </td>
-        <td>{{ j.started_at or j.started or '' }}</td>
-        <td>{{ j.duration or '' }}</td>
-        <td>{{ j.detail or j.message or '' }}</td>
+        <td class="mono">{{ j.started_at or j.started or '' }}</td>
+        <td class="mono">{{ j.duration or '' }}</td>
+        <td class="muted">{{ j.detail or j.message or '' }}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -46,5 +52,5 @@
   {% else %}
   <div class="empty">No jobs reported.</div>
   {% endif %}
-</div>
+</section>
 {% endblock %}

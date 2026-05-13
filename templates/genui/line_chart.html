@@ -3,118 +3,123 @@
 {% set summary = payload.get('summary', '') %}
 
 {% if summary %}
-<div class="card">
-  <p style="color:#c9d1d9">{{ summary }}</p>
-</div>
+<section class="card"><p>{{ summary }}</p></section>
 {% endif %}
 
-<div class="card">
+<section class="card">
   {% if chart.title and chart.title != art.title %}
-    <div class="section-h" style="margin-top:0">{{ chart.title }}</div>
+    <div class="section-h">{{ chart.title }}</div>
   {% endif %}
 
-  <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-  <svg viewBox="0 0 {{ chart.W }} {{ chart.H }}"
-       preserveAspectRatio="xMidYMid meet"
-       style="width:100%;max-width:{{ chart.W }}px;height:auto;display:block;font-family:'IBM Plex Mono',monospace"
-       role="img"
-       aria-label="{{ chart.title or art.title }}">
+  <div class="chart">
+    <div class="chart__scroll">
+    <svg class="chart__svg"
+         viewBox="0 0 {{ chart.W }} {{ chart.H }}"
+         preserveAspectRatio="xMidYMid meet"
+         style="max-width:{{ chart.W }}px"
+         role="img"
+         aria-label="{{ chart.title or art.title }}">
 
-    <!-- Plot frame + horizontal grid lines (also serve as Y-axis ticks) -->
-    {% for tick in chart.y_ticks %}
-      <line x1="{{ chart.PL }}" y1="{{ tick.y_pos }}"
-            x2="{{ chart.W - chart.PR }}" y2="{{ tick.y_pos }}"
-            stroke="#252d3d" stroke-width="1" />
-      <text x="{{ chart.PL - 8 }}" y="{{ tick.y_pos + 4 }}"
-            text-anchor="end" font-size="11" fill="#9aa6b8">{{ tick.y_label }}</text>
-    {% endfor %}
-
-    <!-- Axes -->
-    <line x1="{{ chart.PL }}" y1="{{ chart.PT }}"
-          x2="{{ chart.PL }}" y2="{{ chart.H - chart.PB }}"
-          stroke="#3a4a6e" stroke-width="1" />
-    <line x1="{{ chart.PL }}" y1="{{ chart.H - chart.PB }}"
-          x2="{{ chart.W - chart.PR }}" y2="{{ chart.H - chart.PB }}"
-          stroke="#3a4a6e" stroke-width="1" />
-
-    <!-- Series: polyline + points -->
-    {% for s in chart.series %}
-      <polyline points="{{ s.polyline }}"
-                fill="none"
-                stroke="{{ s.color }}"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round" />
-      {% for c in s.coords %}
-        <circle cx="{{ c.x_pos }}" cy="{{ c.y_pos }}" r="3.5"
-                fill="{{ s.color }}"
-                stroke="#0d0f14" stroke-width="1.5">
-          <title>{{ s.name }} — {{ c.x_label }}: {{ c.y_label }}</title>
-        </circle>
+      <!-- Y-axis ticks (also serve as horizontal grid lines) -->
+      {% for tick in chart.y_ticks %}
+        <line x1="{{ chart.PL }}" y1="{{ tick.y_pos }}"
+              x2="{{ chart.W - chart.PR }}" y2="{{ tick.y_pos }}"
+              stroke="var(--chart-grid)" stroke-width="1" />
+        <text x="{{ chart.PL - 8 }}" y="{{ tick.y_pos + 4 }}"
+              text-anchor="end" font-size="11"
+              fill="var(--chart-label)">{{ tick.y_label }}</text>
       {% endfor %}
-    {% endfor %}
 
-    <!-- X-axis labels -->
-    {% for x in chart.x_labels %}
-      <text x="{{ x.x_pos }}" y="{{ chart.H - chart.PB + 18 }}"
-            text-anchor="middle" font-size="11" fill="#9aa6b8">{{ x.x_label }}</text>
-    {% endfor %}
+      <!-- Axes -->
+      <line x1="{{ chart.PL }}" y1="{{ chart.PT }}"
+            x2="{{ chart.PL }}" y2="{{ chart.H - chart.PB }}"
+            stroke="var(--chart-axis)" stroke-width="1" />
+      <line x1="{{ chart.PL }}" y1="{{ chart.H - chart.PB }}"
+            x2="{{ chart.W - chart.PR }}" y2="{{ chart.H - chart.PB }}"
+            stroke="var(--chart-axis)" stroke-width="1" />
 
-    <!-- Axis titles -->
-    {% if chart.x_axis_label %}
-      <text x="{{ chart.PL + chart.plot_w / 2 }}" y="{{ chart.H - 10 }}"
-            text-anchor="middle" font-size="11" fill="#6b7688"
-            font-family="'IBM Plex Sans',sans-serif">{{ chart.x_axis_label }}</text>
-    {% endif %}
-    {% if chart.y_axis_label %}
-      <text x="{{ 18 }}" y="{{ chart.PT + chart.plot_h / 2 }}"
-            text-anchor="middle" font-size="11" fill="#6b7688"
-            font-family="'IBM Plex Sans',sans-serif"
-            transform="rotate(-90 18 {{ chart.PT + chart.plot_h / 2 }})">{{ chart.y_axis_label }}</text>
-    {% endif %}
-  </svg>
-  </div>
-
-  <!-- Legend (only if more than one series, otherwise it's just noise) -->
-  {% if chart.series|length > 1 %}
-  <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:12px;font-size:12px;font-family:'IBM Plex Mono',monospace;color:#9aa6b8">
-    {% for s in chart.series %}
-      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:{{ s.color }};vertical-align:middle;margin-right:6px"></span>{{ s.name }}</span>
-    {% endfor %}
-  </div>
-  {% endif %}
-
-  <!-- Compact data table beneath the chart. Always render so the data is
-       readable without hovering, and so screen readers / copy-paste work. -->
-  <details style="margin-top:14px">
-    <summary style="cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6b7688;text-transform:uppercase;letter-spacing:.5px">data</summary>
-    <table style="margin-top:8px">
-      <thead>
-        <tr>
-          <th>{{ chart.x_axis_label or 'x' }}</th>
-          {% for s in chart.series %}<th>{{ s.name }}</th>{% endfor %}
-        </tr>
-      </thead>
-      <tbody>
-        {% for x in chart.x_labels %}
-        <tr>
-          <td>{{ x.x_label }}</td>
-          {% for s in chart.series %}
-            {% set match = none %}
-            {% for c in s.coords if c.x_label == x.x_label %}{% set match = c %}{% endfor %}
-            <td>{{ match.y_label if match else '—' }}</td>
-          {% endfor %}
-        </tr>
+      <!-- Series: polyline + points -->
+      {% for s in chart.series %}
+        <polyline points="{{ s.polyline }}"
+                  fill="none"
+                  stroke="{{ s.color }}"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round" />
+        {% for c in s.coords %}
+          <circle cx="{{ c.x_pos }}" cy="{{ c.y_pos }}" r="3.5"
+                  fill="{{ s.color }}"
+                  stroke="var(--bg-app)" stroke-width="1.5">
+            <title>{{ s.name }} — {{ c.x_label }}: {{ c.y_label }}</title>
+          </circle>
         {% endfor %}
-      </tbody>
-    </table>
-  </details>
-</div>
+      {% endfor %}
+
+      <!-- X-axis labels -->
+      {% for x in chart.x_labels %}
+        <text x="{{ x.x_pos }}" y="{{ chart.H - chart.PB + 18 }}"
+              text-anchor="middle" font-size="11"
+              fill="var(--chart-label)">{{ x.x_label }}</text>
+      {% endfor %}
+
+      <!-- Axis titles -->
+      {% if chart.x_axis_label %}
+        <text x="{{ chart.PL + chart.plot_w / 2 }}" y="{{ chart.H - 10 }}"
+              text-anchor="middle" font-size="11"
+              fill="var(--text-tertiary)">{{ chart.x_axis_label }}</text>
+      {% endif %}
+      {% if chart.y_axis_label %}
+        <text x="{{ 18 }}" y="{{ chart.PT + chart.plot_h / 2 }}"
+              text-anchor="middle" font-size="11"
+              fill="var(--text-tertiary)"
+              transform="rotate(-90 18 {{ chart.PT + chart.plot_h / 2 }})">{{ chart.y_axis_label }}</text>
+      {% endif %}
+    </svg>
+    </div>
+
+    {% if chart.series|length > 1 %}
+    <div class="chart__legend">
+      {% for s in chart.series %}
+        <span class="chart__legend-item">
+          <span class="chart__legend-swatch" style="background:{{ s.color }}"></span>
+          {{ s.name }}
+        </span>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Compact data table beneath the chart. Always render so the data is
+         readable without hovering, and so screen readers / copy-paste work. -->
+    <details class="chart__data">
+      <summary>data</summary>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>{{ chart.x_axis_label or 'x' }}</th>
+            {% for s in chart.series %}<th>{{ s.name }}</th>{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for x in chart.x_labels %}
+          <tr>
+            <td>{{ x.x_label }}</td>
+            {% for s in chart.series %}
+              {% set match = none %}
+              {% for c in s.coords if c.x_label == x.x_label %}{% set match = c %}{% endfor %}
+              <td>{{ match.y_label if match else '—' }}</td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
+  </div>
+</section>
 
 {% if chart.source_slug %}
-<div class="card">
-  <div class="section-h" style="margin-top:0">Source</div>
-  <p class="muted" style="font-family:'IBM Plex Mono',monospace;font-size:12px">{{ chart.source_slug }}</p>
-</div>
+<section class="card">
+  <div class="section-h">Source</div>
+  <p class="dim mono">{{ chart.source_slug }}</p>
+</section>
 {% endif %}
 {% endblock %}

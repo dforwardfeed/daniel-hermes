@@ -652,56 +652,62 @@ def _jr_render_Container(props: dict, children: str) -> str:
 def _jr_render_Card(props: dict, children: str) -> str:
     title = props.get("title")
     tag = props.get("tag")
-    parts = ['<div class="card">']
+    parts = ['<div class="card stack">']
     if tag:
         parts.append(f'<span class="tag">{_jr_escape(tag)}</span>')
     if title:
-        parts.append(f'<h3 style="font-size:15px;font-weight:500;color:#f0f6fc;margin:6px 0 8px">{_jr_escape(title)}</h3>')
+        parts.append(f'<h3 class="card__title">{_jr_escape(title)}</h3>')
     parts.append(children)
     parts.append('</div>')
     return "".join(parts)
 
 
 def _jr_render_Stack(props: dict, children: str) -> str:
+    # Class + dynamic per-spec props. Direction/align/gap are content-driven,
+    # so they stay inline; everything else (overflow, color, etc.) inherits.
     direction = props.get("direction", "column")
     gap = props.get("gap", 12)
     align = props.get("align", "stretch")
     gap_px = int(gap) if isinstance(gap, (int, float)) else 12
     return (
-        f'<div style="display:flex;flex-direction:{_jr_escape(direction)};'
+        f'<div class="jr-stack" style="flex-direction:{_jr_escape(direction)};'
         f'gap:{gap_px}px;align-items:{_jr_escape(align)}">{children}</div>'
     )
 
 
 def _jr_render_Grid(props: dict, children: str) -> str:
     columns = props.get("columns")
-    gap = props.get("gap", 14)
+    gap = props.get("gap", 16)
     min_width = props.get("minWidth", 220)
-    gap_px = int(gap) if isinstance(gap, (int, float)) else 14
+    gap_px = int(gap) if isinstance(gap, (int, float)) else 16
     min_px = int(min_width) if isinstance(min_width, (int, float)) else 220
     if isinstance(columns, int) and columns > 0:
         tmpl = f"repeat({columns}, 1fr)"
     else:
         tmpl = f"repeat(auto-fit, minmax({min_px}px, 1fr))"
-    return f'<div style="display:grid;grid-template-columns:{tmpl};gap:{gap_px}px">{children}</div>'
+    return f'<div class="jr-grid" style="grid-template-columns:{tmpl};gap:{gap_px}px">{children}</div>'
 
 
 def _jr_render_Divider(_props: dict, _children: str) -> str:
-    return '<hr style="border:none;border-top:1px solid #252d3d;margin:18px 0">'
+    return '<hr class="divider">'
 
 
 def _jr_render_Heading(props: dict, _children: str) -> str:
+    # Primitive layer styles all headings — no inline overrides needed.
     level = props.get("level", "h2")
-    return f"<{level} style=\"color:#f0f6fc;font-weight:600;margin:14px 0 8px\">{_jr_escape(props.get('text'))}</{level}>"
+    return f"<{level}>{_jr_escape(props.get('text'))}</{level}>"
 
 
 def _jr_render_Paragraph(props: dict, _children: str) -> str:
+    # Primitive `p` styles handle the base. `.muted` is the one variant we
+    # care about (callers ask for it explicitly via the muted prop).
     cls = "muted" if props.get("muted") else ""
     cls_attr = f' class="{cls}"' if cls else ""
-    return f'<p{cls_attr} style="font-size:14px;margin:8px 0">{_jr_escape(props.get("text"))}</p>'
+    return f'<p{cls_attr}>{_jr_escape(props.get("text"))}</p>'
 
 
 def _jr_render_Code(props: dict, _children: str) -> str:
+    # Primitive `pre`/`code` styles take over.
     lang = props.get("lang", "")
     lang_attr = f' data-lang="{_jr_escape(lang)}"' if lang else ""
     return f'<pre{lang_attr}><code>{_jr_escape(props.get("code"))}</code></pre>'
@@ -710,17 +716,17 @@ def _jr_render_Code(props: dict, _children: str) -> str:
 def _jr_render_Quote(props: dict, _children: str) -> str:
     src = props.get("source")
     src_html = (
-        f'<footer style="margin-top:6px;font-size:11px;color:#6b7688">— {_jr_escape(src)}</footer>'
+        f'<footer class="quote__source">— {_jr_escape(src)}</footer>'
         if src else ""
     )
     return (
-        '<blockquote style="border-left:3px solid #6272ff;padding:6px 14px;margin:12px 0;'
-        f'color:#9aa6b8;font-style:italic;background:rgba(98,114,255,0.04);border-radius:0 6px 6px 0">'
+        '<blockquote class="quote">'
         f"<p>{_jr_escape(props.get('text'))}</p>{src_html}</blockquote>"
     )
 
 
 def _jr_render_Link(props: dict, _children: str) -> str:
+    # Primitive `a` styles take over.
     target = props.get("target", "_self")
     rel = ' rel="noopener"' if target == "_blank" else ""
     return (
@@ -750,12 +756,12 @@ def _jr_render_Metric(props: dict, _children: str) -> str:
     delta_kind = props.get("deltaKind", "neutral")
     delta_html = ""
     if delta:
-        cls = "up" if delta_kind == "up" else ("down" if delta_kind == "down" else "")
-        delta_html = f'<div class="kpi-delta {cls}">{_jr_escape(delta)}</div>'
+        cls = "kpi__delta--up" if delta_kind == "up" else ("kpi__delta--down" if delta_kind == "down" else "")
+        delta_html = f'<div class="kpi__delta {cls}">{_jr_escape(delta)}</div>'
     return (
-        '<div>'
-        f'<div class="kpi-label">{_jr_escape(props.get("label"))}</div>'
-        f'<div class="kpi">{_jr_escape(val)}</div>'
+        '<div class="kpi">'
+        f'<div class="kpi__label">{_jr_escape(props.get("label"))}</div>'
+        f'<div class="kpi__value">{_jr_escape(val)}</div>'
         f'{delta_html}'
         '</div>'
     )
@@ -766,12 +772,10 @@ def _jr_render_KeyValueList(props: dict, _children: str) -> str:
     rows = []
     for it in items:
         rows.append(
-            '<dt class="muted" style="font-family:\'IBM Plex Mono\',monospace;'
-            'font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin-top:8px">'
-            f"{_jr_escape(it.get('key'))}</dt>"
-            f'<dd style="color:#c9d1d9;font-size:13px">{_jr_escape(it.get("value"))}</dd>'
+            f'<dt class="kv__key">{_jr_escape(it.get("key"))}</dt>'
+            f'<dd class="kv__value">{_jr_escape(it.get("value"))}</dd>'
         )
-    return f'<dl style="margin:0">{"".join(rows)}</dl>'
+    return f'<dl class="kv">{"".join(rows)}</dl>'
 
 
 def _jr_render_Tag(props: dict, _children: str) -> str:
@@ -780,22 +784,16 @@ def _jr_render_Tag(props: dict, _children: str) -> str:
 
 def _jr_render_Badge(props: dict, _children: str) -> str:
     kind = props.get("kind", "neutral")
-    # Map our 5 kinds to existing CSS classes when possible, else inline color.
-    if kind == "success":
-        return f'<span class="status-pill saved">{_jr_escape(props.get("text"))}</span>'
-    if kind == "warning":
-        return f'<span class="status-pill temporary">{_jr_escape(props.get("text"))}</span>'
-    if kind == "error":
-        return (
-            '<span class="status-pill" style="background:rgba(248,81,73,0.15);color:#f85149">'
-            f'{_jr_escape(props.get("text"))}</span>'
-        )
-    if kind == "info":
-        return (
-            '<span class="status-pill" style="background:rgba(98,114,255,0.15);color:#7b8fff">'
-            f'{_jr_escape(props.get("text"))}</span>'
-        )
-    return f'<span class="status-pill">{_jr_escape(props.get("text"))}</span>'
+    # 5 kinds → 5 semantic badge classes. No more inline colors.
+    cls_map = {
+        "success": "badge badge--success",
+        "warning": "badge badge--warning",
+        "error":   "badge badge--danger",
+        "info":    "badge badge--info",
+        "neutral": "badge badge--neutral",
+    }
+    cls = cls_map.get(kind, "badge badge--neutral")
+    return f'<span class="{cls}">{_jr_escape(props.get("text"))}</span>'
 
 
 def _jr_render_Image(props: dict, _children: str) -> str:
@@ -804,8 +802,8 @@ def _jr_render_Image(props: dict, _children: str) -> str:
     w_attr = f' width="{int(w)}"' if isinstance(w, (int, float)) else ""
     h_attr = f' height="{int(h)}"' if isinstance(h, (int, float)) else ""
     return (
-        f'<img src="{_jr_escape(props["src"])}" alt="{_jr_escape(props.get("alt"))}"'
-        f'{w_attr}{h_attr} style="max-width:100%;height:auto;border-radius:6px">'
+        f'<img class="jr-image" src="{_jr_escape(props["src"])}" '
+        f'alt="{_jr_escape(props.get("alt"))}"{w_attr}{h_attr}>'
     )
 
 
@@ -1166,7 +1164,18 @@ async def api_delete(request: Request) -> Response:
 # it just iterates pre-rendered series/x_labels/y_ticks. Pure function — no
 # I/O, no shared state — so it's trivial to unit-test.
 
-_LINE_CHART_PALETTE = ["#6272ff", "#3fb950", "#d29922", "#f85149", "#7b8fff", "#ff7eb6"]
+# Color sequence for chart series. CSS variables defined in
+# templates/genui/_design.html — the chart inherits the active design-system
+# theme (dark today, light-theme reserve in place). Browsers accept var(...)
+# inside SVG presentation attributes when the SVG is inlined in the document.
+_LINE_CHART_PALETTE = [
+    "var(--chart-1)",
+    "var(--chart-2)",
+    "var(--chart-3)",
+    "var(--chart-4)",
+    "var(--chart-5)",
+    "var(--chart-6)",
+]
 # SVG geometry: kept in one place so styling tweaks don't ripple through the template.
 _LC_W, _LC_H = 880, 380
 _LC_PL, _LC_PR, _LC_PT, _LC_PB = 90, 30, 30, 60  # padding: left/right/top/bottom

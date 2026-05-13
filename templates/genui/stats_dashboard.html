@@ -5,46 +5,51 @@
 {% set summary = payload.get('summary', '') %}
 
 {% if summary %}
-<div class="card">
-  <p style="color:#c9d1d9;font-size:14px">{{ summary }}</p>
-</div>
+<section class="card">
+  <p>{{ summary }}</p>
+</section>
 {% endif %}
 
 {% if kpis %}
 <div class="grid">
   {% for k in kpis %}
-  <div class="card">
-    <div class="kpi-label">{{ k.label }}</div>
-    <div class="kpi">{{ k.value }}</div>
+  <div class="kpi">
+    <div class="kpi__label">{{ k.label }}</div>
+    <div class="kpi__value">{{ k.value }}</div>
     {% if k.delta %}
       {% set up = (k.delta is string and k.delta.startswith('+')) or (k.delta is number and k.delta >= 0) %}
-      <div class="kpi-delta {{ 'up' if up else 'down' }}">{{ k.delta }}{% if k.deltaLabel %} {{ k.deltaLabel }}{% endif %}</div>
+      <div class="kpi__delta {{ 'kpi__delta--up' if up else 'kpi__delta--down' }}">
+        <span>{{ '▲' if up else '▼' }}</span>
+        <span>{{ k.delta }}{% if k.deltaLabel %} {{ k.deltaLabel }}{% endif %}</span>
+      </div>
     {% endif %}
-    {% if k.note %}<div class="muted" style="font-size:11px;margin-top:4px">{{ k.note }}</div>{% endif %}
+    {% if k.note %}<div class="kpi__note">{{ k.note }}</div>{% endif %}
   </div>
   {% endfor %}
 </div>
 {% endif %}
 
 {% for section in sections %}
-<div class="card" style="margin-top:14px">
-  {% if section.title %}<div class="section-h" style="margin-top:0">{{ section.title }}</div>{% endif %}
+<section class="card">
+  {% if section.title %}<div class="section-h">{{ section.title }}</div>{% endif %}
   {% if section.text %}<p class="muted">{{ section.text }}</p>{% endif %}
   {% if section.rows %}
-  <table style="margin-top:8px">
-    {% set cols = section.columns or (section.rows[0].keys()|list if section.rows else []) %}
-    <thead><tr>{% for c in cols %}<th>{{ c }}</th>{% endfor %}</tr></thead>
+  {% set cols = section.columns or (section.rows[0].keys()|list if section.rows else []) %}
+  <table class="table" style="margin-top:var(--space-3)">
+    <thead>
+      <tr>{% for c in cols %}<th>{{ c }}</th>{% endfor %}</tr>
+    </thead>
     <tbody>
       {% for row in section.rows %}
-      <tr>{% for c in cols %}<td>{{ row.get(c, '') }}</td>{% endfor %}</tr>
+        <tr>{% for c in cols %}<td>{{ row.get(c, '') }}</td>{% endfor %}</tr>
       {% endfor %}
     </tbody>
   </table>
   {% endif %}
-</div>
+</section>
 {% endfor %}
 
 {% if not kpis and not sections and not summary %}
-<div class="card empty">No stats data provided.</div>
+<div class="empty">No stats data provided.</div>
 {% endif %}
 {% endblock %}

@@ -4,41 +4,48 @@
 {% set rows = payload.get('rows', []) %}
 {% set columns = payload.get('columns') or (rows[0].keys()|list if rows else []) %}
 
-<div class="card">
-  {% if q %}
-    <p class="muted">Query: <strong style="color:#c9d1d9">{{ q }}</strong> · {{ rows|length }} result{{ '' if rows|length == 1 else 's' }}</p>
-  {% else %}
-    <p class="muted">{{ rows|length }} result{{ '' if rows|length == 1 else 's' }}</p>
-  {% endif %}
+<section class="card">
+  <div class="cluster muted">
+    {% if q %}
+      <span>Query</span>
+      <strong class="strong">{{ q }}</strong>
+    {% endif %}
+    <span class="dim">·</span>
+    <span class="dim mono">{{ rows|length }} result{{ '' if rows|length == 1 else 's' }}</span>
+  </div>
 
   {% if rows %}
-  <table style="margin-top:12px">
-    <thead><tr>{% for c in columns %}<th>{{ c }}</th>{% endfor %}</tr></thead>
-    <tbody>
-      {% for row in rows %}
-        <tr>
-          {% for c in columns %}
-            <td>
-              {% set val = row.get(c, '') %}
-              {% if val is mapping %}<code>{{ val|tojson }}</code>
-              {% elif val is iterable and val is not string %}{{ val|join(', ') }}
-              {% else %}{{ val }}
-              {% endif %}
-            </td>
-          {% endfor %}
-        </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="stack" style="margin-top:var(--space-4)">
+    <table class="table">
+      <thead>
+        <tr>{% for c in columns %}<th>{{ c }}</th>{% endfor %}</tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            {% for c in columns %}
+              <td>
+                {% set val = row.get(c, '') %}
+                {% if val is mapping %}<code>{{ val|tojson }}</code>
+                {% elif val is iterable and val is not string %}{{ val|join(', ') }}
+                {% else %}{{ val }}
+                {% endif %}
+              </td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
   {% else %}
-  <div class="empty">No rows.</div>
+  <div class="empty" style="margin-top:var(--space-3)">No rows.</div>
   {% endif %}
-</div>
+</section>
 
 {% if payload.get('notes') %}
-<div class="card">
+<section class="card">
   <div class="section-h">Notes</div>
   <p class="muted">{{ payload.notes }}</p>
-</div>
+</section>
 {% endif %}
 {% endblock %}

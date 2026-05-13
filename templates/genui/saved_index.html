@@ -4,107 +4,126 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>UI Sessions — Saved Library</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:#0d0f14;color:#c9d1d9;font-family:'IBM Plex Sans',sans-serif;min-height:100vh;padding:24px;line-height:1.5}
-a{color:#6272ff;text-decoration:none}
-a:hover{text-decoration:underline}
-.wrap{max-width:1100px;margin:0 auto}
-header.topbar{display:flex;justify-content:space-between;align-items:center;gap:16px;border-bottom:1px solid #252d3d;padding-bottom:14px;margin-bottom:24px;flex-wrap:wrap}
-header h1{font-size:22px;font-weight:600;color:#f0f6fc}
-header .meta{font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6b7688;letter-spacing:.5px;margin-top:4px}
-.actions{display:flex;gap:8px;flex-wrap:wrap}
-.btn{font-family:'IBM Plex Mono',monospace;font-size:12px;padding:7px 14px;border-radius:6px;border:1px solid #252d3d;background:#14181f;color:#c9d1d9;cursor:pointer;display:inline-flex;align-items:center}
-.btn:hover{border-color:#6272ff;color:#fff;text-decoration:none}
-.section-h{font-family:'IBM Plex Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#6b7688;margin:24px 0 10px}
-.empty{padding:40px;text-align:center;color:#6b7688;font-family:'IBM Plex Mono',monospace;font-size:12px;border:1px dashed #252d3d;border-radius:10px}
-.card{background:#14181f;border:1px solid #252d3d;border-radius:10px;padding:14px;margin-bottom:10px;display:flex;justify-content:space-between;gap:12px;align-items:flex-start;transition:border-color .15s}
-.card:hover{border-color:#3a4a6e}
-.card .title{font-size:14px;font-weight:500;color:#f0f6fc}
-.card .meta{font-family:'IBM Plex Mono',monospace;font-size:10px;color:#6b7688;margin-top:4px}
-.card .meta span+span:before{content:'·';margin:0 6px}
-.tag{display:inline-block;font-family:'IBM Plex Mono',monospace;font-size:10px;padding:2px 6px;border-radius:4px;background:#1c2230;color:#9aa6b8;text-transform:uppercase;letter-spacing:.5px}
-.group-tabs{display:flex;gap:8px;margin-bottom:12px}
-.group-tabs button{font-family:'IBM Plex Mono',monospace;font-size:11px;padding:5px 12px;border-radius:6px;border:1px solid #252d3d;background:transparent;color:#9aa6b8;cursor:pointer;text-transform:uppercase;letter-spacing:.5px}
-.group-tabs button.active{background:#6272ff;border-color:#6272ff;color:#fff}
-</style>
+{% include "genui/_design.html" %}
 </head>
 <body>
-<div class="wrap">
 
 <header class="topbar">
-  <div>
-    <h1>UI Sessions — Saved Library</h1>
-    <div class="meta">{{ items|length }} saved artifact{{ '' if items|length == 1 else 's' }}</div>
-  </div>
-  <div class="actions">
-    <a class="btn" href="/ui/daily">Daily</a>
-    <a class="btn" href="/setup">← Setup</a>
+  <div class="topbar__inner container">
+    <div class="topbar__lead">
+      <div class="topbar__eyebrow">
+        <span class="badge badge--accent">library</span>
+        <span class="dim mono">{{ items|length }} saved</span>
+      </div>
+      <h1 class="topbar__title">Saved Library</h1>
+    </div>
+    <div class="topbar__meta">
+      <a class="btn btn--sm" href="/ui/daily">Daily</a>
+      <a class="btn btn--sm" href="/setup">← Setup</a>
+    </div>
   </div>
 </header>
 
-{% if not items %}
-<div class="empty">No saved artifacts yet. Use the <strong>Save</strong> button on any artifact view to keep it here.</div>
-{% else %}
+<main class="app-shell">
+  <div class="container">
 
-<div class="group-tabs">
-  <button class="active" onclick="showGroup('date')" id="tab-date">By date</button>
-  <button onclick="showGroup('cat')" id="tab-cat">By category</button>
-</div>
+  {% if not items %}
+    <div class="empty">
+      No saved artifacts yet. Use the <strong class="strong">Save</strong> button
+      on any artifact view to keep it here.
+    </div>
+  {% else %}
 
-<section id="group-date">
-  {% for date, group in by_date.items() %}
-  <div class="section-h">{{ date }}</div>
-  {% for a in group %}
-    <a class="card" href="/ui/saved/{{ a.id }}" style="text-decoration:none;color:inherit">
-      <div>
-        <div class="title">{{ a.title }}</div>
-        <div class="meta">
-          <span><span class="tag">{{ a.category }}</span></span>
-          <span>{{ a.viewType }}</span>
-          {% if a.source and a.source.operation %}<span>op: {{ a.source.operation }}</span>{% endif %}
-          <span>id: {{ a.id }}</span>
+  <div class="stack stack--lg">
+    <div class="cluster" style="justify-content:flex-end">
+      <div class="seg" role="tablist" aria-label="Group library by">
+        <button class="seg__btn" id="tab-date" type="button"
+                role="tab" aria-pressed="true"
+                aria-controls="group-date"
+                onclick="showGroup('date')">By date</button>
+        <button class="seg__btn" id="tab-cat" type="button"
+                role="tab" aria-pressed="false"
+                aria-controls="group-cat"
+                onclick="showGroup('cat')">By category</button>
+      </div>
+    </div>
+
+    <section id="group-date" role="tabpanel" aria-labelledby="tab-date" class="stack stack--lg">
+      {% for date, group in by_date.items() %}
+      <div class="stack">
+        <div class="section-h">{{ date }}</div>
+        <div class="grid grid--cols-2">
+          {% for a in group %}
+            <a class="card card--interactive stack" href="/ui/saved/{{ a.id }}"
+               style="text-decoration:none;color:inherit">
+              <div class="cluster" style="justify-content:space-between;gap:var(--space-3)">
+                <div class="cluster">
+                  <span class="badge badge--accent">{{ a.category }}</span>
+                  <span class="dim mono">{{ a.viewType }}</span>
+                </div>
+                <span class="arrow-link">→</span>
+              </div>
+              <div class="strong">{{ a.title }}</div>
+              <div class="cluster dim mono" style="font-size:11px">
+                {% if a.source and a.source.operation %}<span>op: {{ a.source.operation }}</span>{% endif %}
+                <span>id: {{ a.id }}</span>
+              </div>
+            </a>
+          {% endfor %}
         </div>
       </div>
-      <div style="font-size:18px;color:#6b7688">→</div>
-    </a>
-  {% endfor %}
-  {% endfor %}
-</section>
+      {% endfor %}
+    </section>
 
-<section id="group-cat" style="display:none">
-  {% for cat, group in by_category.items() %}
-  <div class="section-h">{{ cat }}</div>
-  {% for a in group %}
-    <a class="card" href="/ui/saved/{{ a.id }}" style="text-decoration:none;color:inherit">
-      <div>
-        <div class="title">{{ a.title }}</div>
-        <div class="meta">
-          <span>{{ a.viewType }}</span>
-          <span>{{ a.createdAt }}</span>
-          {% if a.source and a.source.operation %}<span>op: {{ a.source.operation }}</span>{% endif %}
-          <span>id: {{ a.id }}</span>
+    <section id="group-cat" role="tabpanel" aria-labelledby="tab-cat" class="stack stack--lg" hidden>
+      {% for cat, group in by_category.items() %}
+      <div class="stack">
+        <div class="section-h">{{ cat }}</div>
+        <div class="grid grid--cols-2">
+          {% for a in group %}
+            <a class="card card--interactive stack" href="/ui/saved/{{ a.id }}"
+               style="text-decoration:none;color:inherit">
+              <div class="cluster" style="justify-content:space-between;gap:var(--space-3)">
+                <div class="dim mono">{{ a.viewType }}</div>
+                <span class="arrow-link">→</span>
+              </div>
+              <div class="strong">{{ a.title }}</div>
+              <div class="cluster dim mono" style="font-size:11px">
+                <span>{{ a.createdAt }}</span>
+                {% if a.source and a.source.operation %}<span>op: {{ a.source.operation }}</span>{% endif %}
+                <span>id: {{ a.id }}</span>
+              </div>
+            </a>
+          {% endfor %}
         </div>
       </div>
-      <div style="font-size:18px;color:#6b7688">→</div>
-    </a>
-  {% endfor %}
-  {% endfor %}
-</section>
+      {% endfor %}
+    </section>
+  </div>
 
-<script>
-function showGroup(which) {
-  document.getElementById('group-date').style.display = which === 'date' ? '' : 'none';
-  document.getElementById('group-cat').style.display = which === 'cat' ? '' : 'none';
-  document.getElementById('tab-date').classList.toggle('active', which === 'date');
-  document.getElementById('tab-cat').classList.toggle('active', which === 'cat');
-}
-</script>
-{% endif %}
+  <script>
+  function showGroup(which) {
+    var d = document.getElementById('group-date');
+    var c = document.getElementById('group-cat');
+    var td = document.getElementById('tab-date');
+    var tc = document.getElementById('tab-cat');
+    if (which === 'date') {
+      d.removeAttribute('hidden');
+      c.setAttribute('hidden', '');
+      td.setAttribute('aria-pressed', 'true');
+      tc.setAttribute('aria-pressed', 'false');
+    } else {
+      c.removeAttribute('hidden');
+      d.setAttribute('hidden', '');
+      tc.setAttribute('aria-pressed', 'true');
+      td.setAttribute('aria-pressed', 'false');
+    }
+  }
+  </script>
+  {% endif %}
 
-</div>
+  </div>
+</main>
+
 </body>
 </html>

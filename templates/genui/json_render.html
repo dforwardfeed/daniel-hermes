@@ -5,16 +5,17 @@
    string server-side in _render_json_render_spec (see genui.py). All
    text is html-escaped at emission time and only http/https/mailto/tel/
    relative URLs are allowed in href / src props (validated upstream).
-   The wrapper is intentionally thin — design-token CSS already lives in
-   _base.html and the per-component output references those classes
-   (.card, .tag, .kpi, .status-pill, .grid, etc.). #}
+   The per-component output references the design-system classes (.card,
+   .tag, .kpi, .status-pill, .quote, .kv, .jr-stack, .jr-grid, etc.) so
+   json-render output looks at home next to template-rendered artifacts. #}
 
-{# Element-count footer for debug parity with template artifacts. #}
-{{ jr.html|safe }}
+<article class="stack stack--lg">
+  {{ jr.html|safe }}
+</article>
 
-<div class="card" style="margin-top:14px">
-  <div class="muted" style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.5px;text-transform:uppercase">
+<section class="card">
+  <div class="dim mono" style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase">
     json-render · {{ jr.element_count }} element{{ '' if jr.element_count == 1 else 's' }}
   </div>
-</div>
+</section>
 {% endblock %}
