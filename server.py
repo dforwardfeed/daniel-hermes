@@ -1023,14 +1023,48 @@ async def api_mcp_stderr(request: Request):
     if not path.exists():
         return JSONResponse({"path": str(path), "exists": False, "lines": []})
     try:
+        head = request.query_params.get("head") == "1"
         with open(path, "rb") as fh:
             fh.seek(0, 2)
             size = fh.tell()
-            fh.seek(max(0, size - 512 * 1024))
-            tail = fh.read().decode("utf-8", errors="replace").splitlines()
+            fh.seek(0 if head else max(0, size - 512 * 1024))
+            tail = fh.read(512 * 1024).decode("utf-8", errors="replace").splitlines()
+        if head:
+            tail = tail[:n]
     except OSError as e:
         return JSONResponse({"path": str(path), "error": str(e)}, status_code=500)
     return JSONResponse({"path": str(path), "exists": True, "size": size, "lines": tail[-n:]})
+
+
+async def api_gbrain_doctor(request: Request):
+    """Run `gbrain doctor` with the SAME env Hermes gives the MCP subprocess
+    (safe baseline + our forwarded keys) so we diagnose the real runtime,
+    not the start.sh shell. Read-only diagnostic; 60s cap."""
+    if err := guard(request): return err
+    entry = _build_gbrain_mcp_entry()
+    if entry is None:
+        return JSONResponse({"error": "gbrain MCP entry not configured"}, status_code=400)
+    base = {k: v for k, v in os.environ.items()
+            if k in ("PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "SHELL", "TMPDIR")
+            or k.startswith("XDG_")}
+    env = {**base, **entry["env"]}
+    args = [entry["command"]] + list(request.query_params.getlist("arg") or ["doctor"])
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args, env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        out, errb = await asyncio.wait_for(proc.communicate(), timeout=60)
+        rc = proc.returncode
+    except asyncio.TimeoutError:
+        return JSONResponse({"error": "timeout"}, status_code=504)
+    except OSError as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return JSONResponse({
+        "args": args, "rc": rc,
+        "env_keys": sorted(env.keys()), "home": env.get("HOME"), "cwd": os.getcwd(),
+        "stdout": out.decode("utf-8", "replace")[-20000:],
+        "stderr": errb.decode("utf-8", "replace")[-20000:],
+    })
 
 
 async def api_logs(request: Request):
@@ -1490,6 +1524,7 @@ routes = [
     Route("/setup/api/status",                  api_status),
     Route("/setup/api/logs",                    api_logs),
     Route("/setup/api/mcp-stderr",              api_mcp_stderr),
+    Route("/setup/api/gbrain-doctor",           api_gbrain_doctor),
     Route("/setup/api/gateway/start",           api_gw_start,        methods=["POST"]),
     Route("/setup/api/gateway/stop",            api_gw_stop,         methods=["POST"]),
     Route("/setup/api/gateway/restart",         api_gw_restart,      methods=["POST"]),
