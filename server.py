@@ -1048,7 +1048,15 @@ async def api_gbrain_doctor(request: Request):
             if k in ("PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "SHELL", "TMPDIR")
             or k.startswith("XDG_")}
     env = {**base, **entry["env"]}
-    args = [entry["command"]] + list(request.query_params.getlist("arg") or ["doctor"])
+    # Read-only diagnostic allowlist. `cmd` defaults to the gbrain binary;
+    # a few coreutils are allowed so we can inspect the volume + cgroup
+    # limits without shell access to the container.
+    _ALLOWED = {"gbrain": entry["command"], "bun": "bun", "ls": "ls", "cat": "cat",
+                "du": "du", "df": "df", "free": "free", "stat": "stat", "head": "head"}
+    cmd = request.query_params.get("cmd", "gbrain")
+    if cmd not in _ALLOWED:
+        return JSONResponse({"error": f"cmd must be one of {sorted(_ALLOWED)}"}, status_code=400)
+    args = [_ALLOWED[cmd]] + list(request.query_params.getlist("arg") or (["doctor"] if cmd == "gbrain" else []))
     try:
         proc = await asyncio.create_subprocess_exec(
             *args, env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
