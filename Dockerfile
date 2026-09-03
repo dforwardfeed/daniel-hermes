@@ -36,13 +36,18 @@ RUN curl -fsSL https://bun.sh/install | bash && \
     rm -rf /root/.bun
 
 # Install hermes-agent (provides the `hermes` CLI) and pre-build its React
+# dashboard. NOTE: since upstream v2026.5.12 the `[all]` extra deliberately
+# EXCLUDES messaging platforms (telegram/discord/slack) — they are meant to
+# lazy-install at first use, which does not happen for our gateway
+# subprocess. `messaging` must be listed explicitly or Telegram silently
+# boots with no adapter ("Platform 'Telegram' requirements not met").
 # dashboard so `hermes dashboard` has nothing to build at runtime.
 # Deleting web/ afterwards makes hermes's internal _build_web_ui skip the
 # rebuild step (it early-returns when package.json is absent), so container
 # startup is fast and no runtime npm dependency is needed.
 RUN git clone --depth 1 --branch ${HERMES_REF} https://github.com/NousResearch/hermes-agent.git /opt/hermes-agent && \
     cd /opt/hermes-agent && \
-    uv pip install --system --no-cache -e ".[all]" && \
+    uv pip install --system --no-cache -e ".[all,messaging]" && \
     cd /opt/hermes-agent/web && \
     npm install --silent && \
     npm run build && \
