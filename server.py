@@ -1009,6 +1009,30 @@ async def api_status(request: Request):
     return JSONResponse({"gateway": gw.status(), "providers": providers, "channels": channels})
 
 
+async def api_mcp_stderr(request: Request):
+    """Tail ~/.hermes/logs/mcp-stderr.log — where Hermes redirects every
+    stdio MCP subprocess's stderr. This is the only place a crashing MCP
+    server (gbrain, constellation, lifecoach, genui) explains itself; the
+    gateway log just says "Connection closed". ?lines=N (default 200)."""
+    if err := guard(request): return err
+    try:
+        n = max(1, min(int(request.query_params.get("lines", "200")), 5000))
+    except ValueError:
+        n = 200
+    path = Path(HERMES_HOME) / "logs" / "mcp-stderr.log"
+    if not path.exists():
+        return JSONResponse({"path": str(path), "exists": False, "lines": []})
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - 512 * 1024))
+            tail = fh.read().decode("utf-8", errors="replace").splitlines()
+    except OSError as e:
+        return JSONResponse({"path": str(path), "error": str(e)}, status_code=500)
+    return JSONResponse({"path": str(path), "exists": True, "size": size, "lines": tail[-n:]})
+
+
 async def api_logs(request: Request):
     if err := guard(request): return err
     return JSONResponse({"lines": list(gw.logs)})
@@ -1465,6 +1489,7 @@ routes = [
     Route("/setup/api/config",                  api_config_put,      methods=["PUT"]),
     Route("/setup/api/status",                  api_status),
     Route("/setup/api/logs",                    api_logs),
+    Route("/setup/api/mcp-stderr",              api_mcp_stderr),
     Route("/setup/api/gateway/start",           api_gw_start,        methods=["POST"]),
     Route("/setup/api/gateway/stop",            api_gw_stop,         methods=["POST"]),
     Route("/setup/api/gateway/restart",         api_gw_restart,      methods=["POST"]),
