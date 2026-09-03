@@ -163,6 +163,7 @@ GBRAIN_BIN = "/data/.bun/bin/gbrain"
 # Constellation API (YouTube-insight library). Lives inside the Docker image,
 # spawned by hermes as a subprocess when the two env vars below are set.
 CONSTELLATION_MCP_SCRIPT = "/app/constellation_mcp.py"
+LIFECOACH_MCP_SCRIPT = "/app/lifecoach_mcp.py"
 
 # GenUI MCP server — wraps the same-container /api/ui/views API so the agent
 # can create user-defined views and mutate their items (add / mark done /
@@ -295,6 +296,42 @@ def _build_constellation_mcp_entry() -> dict | None:
     }
 
 
+def _build_lifecoach_mcp_entry() -> dict | None:
+    """Construct the Life Coach stdio MCP server entry for config.yaml, or
+    None if it isn't configured.
+
+    Life Coach is the user's daily-goals / gratitude-journal / fitness app
+    (WHOOP + Fitbit). Read AND write: the agent can save gratitude entries
+    and add/complete goals. The upstream API has no delete endpoints.
+
+    Boots only when BOTH env vars are present:
+      - LIFECOACH_BASE_URL    deployed app root (no trailing slash)
+      - LIFECOACH_API_TOKEN   the app's AGENT_API_TOKEN secret
+
+    Mirror of _build_constellation_mcp_entry: namespace-scoped env forward,
+    same timeouts.
+    """
+    base_url = os.environ.get("LIFECOACH_BASE_URL", "").strip()
+    token = os.environ.get("LIFECOACH_API_TOKEN", "").strip()
+    if not base_url or not token:
+        return None
+    if not Path(LIFECOACH_MCP_SCRIPT).exists():
+        return None
+
+    forwarded_env: dict[str, str] = {}
+    for k, v in os.environ.items():
+        if k.startswith("LIFECOACH_") and v:
+            forwarded_env[k] = v
+
+    return {
+        "command": "python3",
+        "args": [LIFECOACH_MCP_SCRIPT],
+        "env": forwarded_env,
+        "timeout": 60,
+        "connect_timeout": 30,
+    }
+
+
 def _build_genui_mcp_entry() -> dict | None:
     """Construct the GenUI stdio MCP server entry for config.yaml, or None
     if GenUI write-auth isn't configured.
@@ -400,6 +437,21 @@ def write_config_yaml(data: dict[str, str]) -> None:
             f"script_present={script_present})"
         )
 
+    lifecoach_entry = _build_lifecoach_mcp_entry()
+    if lifecoach_entry is not None:
+        mcp_servers["lifecoach"] = lifecoach_entry
+        lifecoach_status = (
+            f"registered (env_forwarded={len(lifecoach_entry['env'])}, "
+            f"timeout={lifecoach_entry['timeout']}s)"
+        )
+    else:
+        mcp_servers.pop("lifecoach", None)
+        lifecoach_status = (
+            f"skipped (base_url_set={bool(os.environ.get('LIFECOACH_BASE_URL', '').strip())}, "
+            f"token_set={bool(os.environ.get('LIFECOACH_API_TOKEN', '').strip())}, "
+            f"script_present={Path(LIFECOACH_MCP_SCRIPT).exists()})"
+        )
+
     genui_entry = _build_genui_mcp_entry()
     if genui_entry is not None:
         mcp_servers["genui"] = genui_entry
@@ -427,6 +479,7 @@ def write_config_yaml(data: dict[str, str]) -> None:
     print(f"[hermes-config] mcp_servers.gbrain: {gbrain_status}", flush=True)
     print(f"[hermes-config] mcp_servers.constellation: {constellation_status}", flush=True)
     print(f"[hermes-config] mcp_servers.genui: {genui_status}", flush=True)
+    print(f"[hermes-config] mcp_servers.lifecoach: {lifecoach_status}", flush=True)
 
 
 def write_env(path: Path, data: dict[str, str]) -> None:

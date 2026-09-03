@@ -37,6 +37,10 @@ daniel-hermes/
 │                                     - Gateway + Dashboard subprocess managers
 │                                     - _build_gbrain_mcp_entry: how GBrain is registered with Hermes
 │
+├── constellation_mcp.py            stdio MCP server wrapping the Constellation API (read-only)
+├── lifecoach_mcp.py                stdio MCP server wrapping the Life Coach API (goals, gratitude, fitness; read/write)
+│                                     Both follow the same template — copy one to add a new app connector,
+│                                     then add _build_<name>_mcp_entry + registration in server.py, COPY in Dockerfile.
 ├── genui.py                        GenUI portal. Artifact storage, validation, rendering dispatch.
 │                                     - Validators: VALID_VIEW_TYPES, SUPPORTED_TEMPLATES, etc.
 │                                     - Auth helpers: cookie OR Bearer token on /api/ui/*

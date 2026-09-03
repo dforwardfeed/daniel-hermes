@@ -522,6 +522,36 @@ Ask Hermes naturally — *"What's my Brain saying about agent memory?"*,
 and it picks the right tool. The full API spec is documented at
 `<CONSTELLATION_BASE_URL>/api/agent/manifest`.
 
+## Life Coach (daily goals, gratitude journal, fitness — read/write)
+
+Hermes can read and write the user's **Life Coach** app: the daily "one
+thing no matter what" goal, the general to-do list, the gratitude journal,
+and WHOOP/Fitbit fitness data (sleep score, cardio zone minutes, steps).
+Ships as a stdio MCP server (`lifecoach_mcp.py`), same pattern as
+Constellation. The upstream API has **no delete endpoints**; completing a
+general goal is recorded in a sidecar and the item stays in the app's list
+until checked off in the UI.
+
+| Variable | Default | Description |
+|---|---|---|
+| `LIFECOACH_BASE_URL` | *(unset)* | Deployed app root, e.g. `https://life-coach-assistant.vercel.app`. No trailing slash. |
+| `LIFECOACH_API_TOKEN` | *(unset)* | The app's `AGENT_API_TOKEN`. Sent as `Authorization: Bearer <token>`. Never logged. |
+| `LIFECOACH_TIMEOUT` | `30` | HTTP request timeout in seconds. |
+
+Boot log when active: `[hermes-config] mcp_servers.lifecoach: registered (...)`.
+Tools (namespaced `mcp_lifecoach_*`): `fitness_overview`, `sleep_scores`,
+`sleep_summary`, `cardio_minutes`, `steps`, `list_goals`, `add_goal`,
+`complete_goal`, `uncomplete_goal`, `edit_goal`, `gratitude_list`,
+`gratitude_today`, `save_gratitude`.
+
+**Timezone gotcha:** the API's calendar day is UTC, which flips at 8pm US
+Eastern. Tool descriptions tell the model to pass explicit dates, but if an
+evening entry lands on "tomorrow", that's why.
+
+Ask naturally — *"What was my sleep score the last 3 weeks?"*, *"Today I'm
+grateful for a quiet morning"*, *"Add a daily goal: ship the connector"*.
+Full spec at `<LIFECOACH_BASE_URL>/api/agent/manifest`.
+
 ## Credits
 
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) by [Nous Research](https://nousresearch.com/)
